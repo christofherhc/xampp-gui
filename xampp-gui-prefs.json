@@ -1,0 +1,9 @@
+{
+  "theme": "dark",
+  "editor": "Sublime Text",
+  "refresh_interval": 4000,
+  "autostart": false,
+  "hidden_services": [
+    "ProFTPD"
+  ]
+}
