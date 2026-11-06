@@ -36,6 +36,7 @@ THEMES = {
         "fg_status": "#a6e3a1",
         "fg_active": "#a6e3a1",
         "fg_inactive": "#f38ba8",
+        "fg_conflict": "#fab387",
         "btn_start": "#28a745",
         "btn_stop": "#dc3545",
         "btn_restart": "#f39c12",
@@ -56,6 +57,7 @@ THEMES = {
         "fg_status": "#40a02b",
         "fg_active": "#40a02b",
         "fg_inactive": "#d20f39",
+        "fg_conflict": "#df8e1d",
         "btn_start": "#28a745",
         "btn_stop": "#dc3545",
         "btn_restart": "#f39c12",
@@ -119,17 +121,41 @@ def detect_services():
 
 SERVICES = detect_services()
 
-def _is_service_running(info):
-    """Comprueba de forma robusta y en múltiples capas si un servicio está activo.
-    Capa 1: Archivo PID y verificación de existencia en /proc/<pid>.
-    Capa 2: pgrep por nombres de proceso candidatos y ruta de /opt/lampp.
-    Capa 3: Sondeo TCP del puerto local asociado (si está definido).
+def _is_lampp_pid(pid, service_name=None):
+    """Comprueba si un PID vivo pertenece a un proceso ejecutado desde /opt/lampp."""
+    try:
+        exe_path = os.path.realpath(f"/proc/{pid}/exe")
+        if "/opt/lampp" in exe_path:
+            return True
+    except Exception:
+        pass
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            cmdline = f.read().decode("utf-8", errors="ignore")
+        if "/opt/lampp" in cmdline:
+            return True
+        if service_name and service_name in cmdline:
+            return True
+    except Exception:
+        pass
+    return False
+
+def detect_service_status(info):
+    """Comprueba de forma robusta y en múltiples capas el estado de un servicio.
+    Distingue procesos genuinos de XAMPP (/opt/lampp) de servicios del sistema (ej. apache2/mysql nativos).
+    Devuelve una tupla: (estado_str, is_conflict)
+    - ("● Activo", False): Servicio de XAMPP corriendo correctamente.
+    - ("⚠️ Conflicto", True): Puerto ocupado por un servicio ajeno a XAMPP.
+    - ("○ Inactivo", False): Servicio detenido y puerto libre.
     """
-    # Capa 1: Verificación de archivo PID
+    service_name = info.get("name", "")
+    lampp_running = False
+
+    # Capa 1: Verificación de archivo PID verificado en /proc/<pid>
     pid_files = []
     if info.get("pid_file"):
         pid_files.append(info["pid_file"])
-    elif info.get("name") == "mysql":
+    elif service_name == "mysql":
         mysql_dir = "/opt/lampp/var/mysql"
         if os.path.isdir(mysql_dir):
             try:
@@ -150,42 +176,66 @@ def _is_service_running(info):
                     if pid_str.isdigit():
                         pid = int(pid_str)
                         if os.path.exists(f"/proc/{pid}"):
-                            return True
+                            # Validar que pertenezca a XAMPP y no sea un PID reciclado
+                            if _is_lampp_pid(pid, service_name):
+                                lampp_running = True
+                                break
+                            elif not os.path.exists(f"/proc/{pid}/exe"):
+                                # Si no se puede leer /proc/<pid>/exe por permisos root, pero el PID file de XAMPP existe
+                                lampp_running = True
+                                break
             except Exception:
                 pass
 
-    # Capa 2: Comprobación mediante pgrep
-    procs = info.get("procs", [])
-    for p in procs:
-        if not p:
-            continue
-        try:
-            res = subprocess.run(["pgrep", "-x", p], capture_output=True, text=True)
-            if res.returncode == 0:
-                return True
-        except Exception:
-            pass
-
-    service_name = info.get("name", "")
-    if service_name:
+    # Capa 2: Comprobación de procesos de /opt/lampp mediante pgrep
+    if not lampp_running and service_name:
         try:
             res = subprocess.run(["pgrep", "-f", f"/opt/lampp.*{service_name}"],
                                  capture_output=True, text=True)
-            if res.returncode == 0:
-                return True
+            if res.returncode == 0 and res.stdout.strip():
+                lampp_running = True
         except Exception:
             pass
 
-    # Capa 3: Comprobación de socket TCP en localhost
+    if not lampp_running:
+        procs = info.get("procs", [])
+        for p in procs:
+            if not p:
+                continue
+            try:
+                res = subprocess.run(["pgrep", "-x", p], capture_output=True, text=True)
+                if res.returncode == 0:
+                    for p_str in res.stdout.strip().split():
+                        if p_str.isdigit() and _is_lampp_pid(int(p_str), service_name):
+                            lampp_running = True
+                            break
+            except Exception:
+                pass
+            if lampp_running:
+                break
+
+    # Capa 3: Sondeo TCP del puerto local asociado
+    port_open = False
     port = info.get("port")
     if port:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.6):
-                return True
+                port_open = True
         except Exception:
-            pass
+            port_open = False
 
-    return False
+    if lampp_running:
+        return ("● Activo", False)
+    elif port_open:
+        # Puerto ocupado pero NO por XAMPP -> Conflicto detectado
+        return ("⚠️ Conflicto", True)
+    else:
+        return ("○ Inactivo", False)
+
+def _is_service_running(info):
+    """Compatibilidad: Devuelve True solo si el servicio de XAMPP está activo."""
+    status, _ = detect_service_status(info)
+    return status == "● Activo"
 
 class XamppGUI:
     def __init__(self):
@@ -194,6 +244,7 @@ class XamppGUI:
         self.root.geometry("520x760")
         self.root.resizable(False, False)
         
+        self._cached_php = None
         self._is_closing = False
         self._status_lock = threading.Lock()
         self.service_status_badges = {}
@@ -216,6 +267,8 @@ class XamppGUI:
         
         self.setup_ui()
         self.apply_theme()
+        self.center_window(520, 770)
+        self.setup_shortcuts()
         self.check_xampp()
         if self.autostart and SERVICES:
             self.root.after(500, self.start_all_quiet)
@@ -226,6 +279,29 @@ class XamppGUI:
         
         write_log("=== APLICACIÓN INICIADA ===")
         self.root.mainloop()
+
+    def center_window(self, width, height):
+        """Centra la ventana principal en la pantalla del usuario."""
+        try:
+            self.root.update_idletasks()
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+            x = max(0, (screen_w - width) // 2)
+            y = max(0, (screen_h - height) // 2)
+            self.root.geometry(f"{width}x{height}+{x}+{y}")
+        except Exception:
+            self.root.geometry(f"{width}x{height}")
+
+    def setup_shortcuts(self):
+        """Configura atajos de teclado globales para mejorar la ergonomía."""
+        self.root.bind("<F5>", lambda e: self.update_status())
+        self.root.bind("<Control-r>", lambda e: self.update_status())
+        self.root.bind("<Control-q>", lambda e: self.on_close())
+        self.root.bind("<Control-w>", lambda e: self.on_close())
+        self.root.bind("<Control-Shift-S>", lambda e: self.run_cmd("start"))
+        self.root.bind("<Control-Shift-s>", lambda e: self.run_cmd("start"))
+        self.root.bind("<Control-Shift-X>", lambda e: self.run_cmd("stop"))
+        self.root.bind("<Control-Shift-x>", lambda e: self.run_cmd("stop"))
     
     def safe_after(self, delay, callback):
         """Ejecuta un callback en el hilo de Tkinter de forma segura si la UI sigue viva."""
@@ -392,6 +468,7 @@ class XamppGUI:
         self.status_box.tag_configure("label", font=("Monospace", 9, "bold"))
         self.status_box.tag_configure("active", font=("Monospace", 9, "bold"))
         self.status_box.tag_configure("inactive", font=("Monospace", 9, "bold"))
+        self.status_box.tag_configure("conflict", font=("Monospace", 9, "bold"))
         self.status_box.tag_configure("php", font=("Monospace", 9, "normal"))
         self.status_box.configure(state="disabled")
         
@@ -429,8 +506,8 @@ class XamppGUI:
         self.btn_start_all.grid(row=0, column=0, padx=2, pady=2)
         
         self.btn_stop_all = tk.Button(self.frame_servers, text="⏹ Detener Todos",
-                                        font=("Helvetica", 9, "bold"), width=12,
-                                        command=lambda: self.run_cmd("stop"))
+                                         font=("Helvetica", 9, "bold"), width=12,
+                                         command=lambda: self.run_cmd("stop"))
         self.btn_stop_all.grid(row=0, column=1, padx=2, pady=2)
         
         self.btn_restart_all = tk.Button(self.frame_servers, text="🔄 Reiniciar Todos",
@@ -464,28 +541,38 @@ class XamppGUI:
         self.lbl_projects_sel.grid(row=0, column=0, padx=2, pady=2)
         self.project_var = tk.StringVar()
         self.project_combo = ttk.Combobox(self.frame_projects, textvariable=self.project_var,
-                                          state="readonly", width=20)
-        self.project_combo.grid(row=0, column=1, columnspan=3, padx=2, pady=2, sticky="w")
+                                          state="readonly", width=18)
+        self.project_combo.grid(row=0, column=1, columnspan=2, padx=2, pady=2, sticky="w")
         
         self.btn_refresh_projects = tk.Button(self.frame_projects, text="🔄", width=3,
                                               font=("Helvetica", 9, "bold"),
                                               command=self.load_projects)
-        self.btn_refresh_projects.grid(row=0, column=4, padx=2, pady=2)
+        self.btn_refresh_projects.grid(row=0, column=3, padx=2, pady=2)
+
+        self.btn_new_project = tk.Button(self.frame_projects, text="➕", width=3,
+                                         font=("Helvetica", 9, "bold"),
+                                         command=self.new_project)
+        self.btn_new_project.grid(row=0, column=4, padx=2, pady=2)
         
         self.btn_open_editor = tk.Button(self.frame_projects, text="✏ Editor",
                                           width=8, font=("Helvetica", 8, "bold"),
                                           command=self.open_project_editor)
-        self.btn_open_editor.grid(row=1, column=0, columnspan=2, padx=2, pady=2, sticky="w")
+        self.btn_open_editor.grid(row=1, column=0, padx=2, pady=2)
         
         self.btn_open_terminal = tk.Button(self.frame_projects, text="💻 Terminal",
                                             width=9, font=("Helvetica", 8, "bold"),
                                             command=self.open_project_terminal)
-        self.btn_open_terminal.grid(row=1, column=2, padx=2, pady=2)
+        self.btn_open_terminal.grid(row=1, column=1, padx=2, pady=2)
         
         self.btn_open_browser = tk.Button(self.frame_projects, text="🌐 Navegador",
                                            width=10, font=("Helvetica", 8, "bold"),
                                            command=self.open_project_browser)
-        self.btn_open_browser.grid(row=1, column=3, padx=2, pady=2)
+        self.btn_open_browser.grid(row=1, column=2, padx=2, pady=2)
+
+        self.btn_open_folder = tk.Button(self.frame_projects, text="📁 Carpeta",
+                                         width=8, font=("Helvetica", 8, "bold"),
+                                         command=self.open_project_folder)
+        self.btn_open_folder.grid(row=1, column=3, columnspan=2, padx=2, pady=2)
         
         self.load_projects()
         
@@ -570,6 +657,7 @@ class XamppGUI:
             self.status_box.tag_configure("active", foreground=t["fg_active"])
             self.status_box.tag_configure("inactive", foreground=t["fg_inactive"])
             self.status_box.tag_configure("php", foreground=t["fg_label"])
+            self.status_box.tag_configure("conflict", foreground=t.get("fg_conflict", "#f39c12"))
         
         if hasattr(self, "btn_refresh"):
             self.btn_refresh.configure(bg=t["bg_button"], fg=t["fg"])
@@ -596,7 +684,7 @@ class XamppGUI:
         else:
             self._update_service_buttons({})
         
-        for btn_name in ("btn_official", "btn_refresh_projects", "btn_open_editor", "btn_open_terminal", "btn_open_browser", "btn_localhost", "btn_phpmyadmin", "btn_htdocs"):
+        for btn_name in ("btn_official", "btn_refresh_projects", "btn_new_project", "btn_open_editor", "btn_open_terminal", "btn_open_browser", "btn_open_folder", "btn_localhost", "btn_phpmyadmin", "btn_htdocs"):
             if hasattr(self, btn_name):
                 getattr(self, btn_name).configure(bg=t["bg_button"], fg=t["fg"])
                 
@@ -916,17 +1004,19 @@ class XamppGUI:
                 for label, info in SERVICES.items():
                     if label in self.hidden_services:
                         continue
-                    running = _is_service_running(info)
-                    statuses[label] = "● Activo" if running else "○ Inactivo"
+                    status_str, _ = detect_service_status(info)
+                    statuses[label] = status_str
                 
-                php_version = ""
-                try:
-                    res = subprocess.run(["/opt/lampp/bin/php", "-v"], capture_output=True, text=True, timeout=3)
-                    first_line = res.stdout.strip().splitlines()[0] if res.stdout.strip() else ""
-                    if "PHP" in first_line:
-                        php_version = first_line.split()[1]
-                except Exception:
-                    php_version = ""
+                php_version = getattr(self, "_cached_php", None)
+                if not php_version:
+                    try:
+                        res = subprocess.run(["/opt/lampp/bin/php", "-v"], capture_output=True, text=True, timeout=3)
+                        first_line = res.stdout.strip().splitlines()[0] if res.stdout.strip() else ""
+                        if "PHP" in first_line:
+                            php_version = first_line.split()[1]
+                            self._cached_php = php_version
+                    except Exception:
+                        php_version = ""
                 
                 self._last_statuses = statuses
                 self._last_php = php_version
@@ -946,10 +1036,18 @@ class XamppGUI:
         self.status_box.insert(tk.END, "Estado de Servicios:\n", "title")
         for label, status in statuses.items():
             self.status_box.insert(tk.END, f"  {label}: ", "label")
-            tag = "active" if status == "● Activo" else "inactive"
+            if status == "● Activo":
+                tag = "active"
+            elif "Conflicto" in status:
+                tag = "conflict"
+            else:
+                tag = "inactive"
             self.status_box.insert(tk.END, f"{status}\n", tag)
         if php_version:
-            self.status_box.insert(tk.END, f"  PHP {php_version}", "php")
+            self.status_box.insert(tk.END, f"  PHP {php_version}\n", "php")
+        has_conflicts = any("Conflicto" in s for s in statuses.values())
+        if has_conflicts:
+            self.status_box.insert(tk.END, "  ⚠️ Puerto ocupado por servicio del sistema\n", "conflict")
         self.status_box.configure(state="disabled")
         
         self._update_service_buttons(statuses)
@@ -957,7 +1055,7 @@ class XamppGUI:
         state_key = "|".join(statuses.values())
         if not hasattr(self, "_last_state") or self._last_state != state_key:
             self._last_state = state_key
-            resumen = ", ".join(f"{label.split()[0]}[{'ON' if s=='● Activo' else 'OFF'}]" for label, s in statuses.items())
+            resumen = ", ".join(f"{label.split()[0]}[{'ON' if s=='● Activo' else ('CONFLICT' if 'Conflicto' in s else 'OFF')}]" for label, s in statuses.items())
             write_log(f"Estado: {resumen} | {php_version}")
     
     def _update_service_buttons(self, statuses):
@@ -966,18 +1064,21 @@ class XamppGUI:
             return
         
         t = THEMES[self.current_theme]
-        service_active = {info["name"]: statuses.get(label, "○ Inactivo") == "● Activo"
-                          for label, info in ALL_SERVICES.items()}
+        service_statuses = {info["name"]: statuses.get(label, "○ Inactivo")
+                            for label, info in ALL_SERVICES.items()}
         
         for service, btns in self.service_buttons.items():
-            active = service_active.get(service, False)
+            st = service_statuses.get(service, "○ Inactivo")
+            active = (st == "● Activo")
+            conflict = ("Conflicto" in st)
             
             # Actualizar badge en la fila del servicio
             badge = self.service_status_badges.get(service)
             if badge:
+                badge_fg = t["fg_active"] if active else (t.get("fg_conflict", "#f39c12") if conflict else t["fg_inactive"])
                 badge.configure(
-                    text="● Activo" if active else "○ Inactivo",
-                    fg=t["fg_active"] if active else t["fg_inactive"],
+                    text=st,
+                    fg=badge_fg,
                     bg=t["bg"]
                 )
             
@@ -1013,7 +1114,7 @@ class XamppGUI:
         
         # Actualizar botones globales
         visible_services = [info["name"] for label, info in SERVICES.items() if label not in self.hidden_services]
-        num_active = sum(1 for s in visible_services if service_active.get(s, False))
+        num_active = sum(1 for s in visible_services if service_statuses.get(s) == "● Activo")
         num_total = len(visible_services)
         all_active = (num_active == num_total) if num_total > 0 else False
         none_active = (num_active == 0)
@@ -1062,6 +1163,10 @@ class XamppGUI:
                                  "Cambia el editor en Configuración para continuar.")
             return
         
+        # Advertencia de permisos si el archivo pertenece a root y el usuario no puede escribirlo
+        if os.path.exists(path) and not os.access(path, os.W_OK):
+            write_log(f"Aviso: El archivo {path} requiere permisos de superusuario para guardar cambios.")
+        
         if editor_cmd in ["nano", "vi"]:
             terminal = self.find_terminal()
             if terminal:
@@ -1072,14 +1177,15 @@ class XamppGUI:
             subprocess.Popen([editor_cmd, path])
     
     def find_terminal(self):
-        terminals = ["x-terminal-emulator", "gnome-terminal", "konsole",
-                     "xfce4-terminal", "mate-terminal", "lxterminal"]
+        """Busca emuladores de terminal instalados sin crear procesos de shell."""
+        terminals = [
+            "x-terminal-emulator", "gnome-terminal", "konsole",
+            "xfce4-terminal", "mate-terminal", "alacritty", "kitty",
+            "tilix", "terminator", "lxterminal", "xterm"
+        ]
         for term in terminals:
-            try:
-                subprocess.run(["which", term], capture_output=True, check=True)
+            if shutil.which(term):
                 return term
-            except Exception:
-                continue
         return None
     
     def open_log_folder(self):
@@ -1235,11 +1341,11 @@ class XamppGUI:
     def show_about(self):
         installed = ", ".join(SERVICES.keys()) if SERVICES else "ninguno"
         messagebox.showinfo("Acerca de",
-                           "XAMPP Control Center v2.1\n\n"
-                           "Interfaz gráfica para administrar XAMPP en Linux Mint.\n\n"
+                           "XAMPP Control Center v2.2\n\n"
+                           "Interfaz gráfica para administrar XAMPP en Linux (Mint, Ubuntu, Debian).\n\n"
                            f"Servicios detectados: {installed}\n"
-                           "Características: Auto-refresh, logs integrados,\n"
-                           "selector de editor, modo claro/oscuro.")
+                           "Características: Detección anti-colisión, auto-refresh,\n"
+                           "gestor de proyectos, logs integrados, temas claro/oscuro.")
 
     def _port_open(self, host, port, timeout=1.0):
         """Comprueba si un puerto responde en localhost."""
@@ -1252,18 +1358,68 @@ class XamppGUI:
     def load_projects(self):
         """Lista las carpetas (proyectos) del directorio htdocs en el Combobox."""
         projects = []
+        system_folders = {"img", "webalizer"}
         try:
-            for entry in os.scandir(HTDOCS_PATH):
-                if entry.is_dir() and not entry.name.startswith("."):
-                    projects.append(entry.name)
+            if os.path.isdir(HTDOCS_PATH):
+                for entry in os.scandir(HTDOCS_PATH):
+                    if entry.is_dir() and not entry.name.startswith("."):
+                        if entry.name.lower() not in system_folders:
+                            projects.append(entry.name)
         except Exception as e:
             write_log(f"Error listando proyectos en {HTDOCS_PATH}: {e}")
             projects = []
         projects.sort(key=str.lower)
         self.projects = projects
         self.project_combo["values"] = projects
-        if projects and not self.project_var.get():
-            self.project_var.set(projects[0])
+        current = self.project_var.get()
+        if projects:
+            if not current or current not in projects:
+                self.project_var.set(projects[0])
+        else:
+            self.project_var.set("")
+
+    def new_project(self):
+        """Crea una nueva carpeta de proyecto dentro de htdocs."""
+        from tkinter import simpledialog
+        name = simpledialog.askstring("Nuevo Proyecto", "Introduce el nombre del nuevo proyecto:", parent=self.root)
+        if not name:
+            return
+        name = name.strip()
+        # Validación de seguridad: evitar path traversal y nombres inválidos
+        if not name or any(c in name for c in ('/', '\\', '..', ':', '*', '?', '"', '<', '>', '|')) or name.startswith('.'):
+            messagebox.showerror("Nombre inválido", "El nombre del proyecto solo puede contener letras, números, guiones y subrayados.")
+            return
+        
+        target_path = os.path.join(HTDOCS_PATH, name)
+        if os.path.exists(target_path):
+            messagebox.showwarning("Ya existe", f"Ya existe una carpeta o proyecto con el nombre '{name}'.")
+            return
+        
+        try:
+            os.makedirs(target_path, exist_ok=True)
+            write_log(f"Nuevo proyecto creado: {target_path}")
+            self.load_projects()
+            self.project_var.set(name)
+            self.send_notification(f"Proyecto '{name}' creado con éxito")
+        except PermissionError:
+            write_log(f"Permiso denegado al crear proyecto en {target_path}")
+            messagebox.showerror(
+                "Permiso denegado",
+                f"No tienes permisos para escribir en {HTDOCS_PATH}.\n\n"
+                f"Ejecuta en tu terminal:\nsudo chown -R $USER:$USER {HTDOCS_PATH}\n"
+                "para permitir a tu usuario crear proyectos sin restricciones."
+            )
+        except Exception as e:
+            write_log(f"Error creando proyecto: {e}")
+            messagebox.showerror("Error", f"No se pudo crear el proyecto:\n{e}")
+
+    def open_project_folder(self):
+        """Abre la carpeta del proyecto seleccionado en el explorador de archivos."""
+        path = self.get_selected_project()
+        if not path:
+            return
+        write_log(f"Abriendo carpeta del proyecto: {path}")
+        subprocess.Popen(["xdg-open", path])
     
     def get_selected_project(self):
         name = self.project_var.get().strip()
@@ -1290,12 +1446,27 @@ class XamppGUI:
             return
         write_log(f"Abriendo terminal en: {path}")
         terminal = self.find_terminal()
-        if terminal:
-            flag = "--workdir" if "konsole" in terminal else "--working-directory"
-            subprocess.Popen([terminal, flag, path])
-        else:
+        if not terminal:
             messagebox.showwarning("Sin terminal",
                                    "No se encontró un emulador de terminal.")
+            return
+
+        cmd = [terminal]
+        if "konsole" in terminal:
+            cmd.extend(["--workdir", path])
+        elif terminal in ("gnome-terminal", "mate-terminal", "xfce4-terminal", "tilix", "terminator", "alacritty"):
+            cmd.extend(["--working-directory", path])
+        elif "kitty" in terminal:
+            cmd.extend(["-d", path])
+        
+        try:
+            subprocess.Popen(cmd, cwd=path)
+        except Exception as e:
+            write_log(f"Error lanzando terminal con argumentos específicos: {e}")
+            try:
+                subprocess.Popen([terminal], cwd=path)
+            except Exception as e2:
+                messagebox.showerror("Error", f"No se pudo abrir el terminal:\n{e2}")
     
     def open_project_browser(self):
         path = self.get_selected_project()
@@ -1383,10 +1554,15 @@ def write_log(message):
     log_entry = f"[{timestamp}] {message}\n"
     with LOG_LOCK:
         try:
+            file_existed = os.path.exists(LOG_PATH)
             rotate_log_if_needed()
             with open(LOG_PATH, "a", encoding="utf-8") as f:
                 f.write(log_entry)
-            os.chmod(LOG_PATH, 0o600)
+            if not file_existed:
+                try:
+                    os.chmod(LOG_PATH, 0o600)
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Error escribiendo log: {e}")
 

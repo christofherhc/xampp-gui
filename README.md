@@ -31,8 +31,8 @@ Desarrollado en Python con Tkinter nativo, ofrece una alternativa rápida, perso
 │    [▶ Iniciar Todos]  [⏹ Detener Todos]  [🔄 Reiniciar]│
 ├──────────────────────────────────────────────────────┤
 │  Mis Proyectos (htdocs)                              │
-│    Proyecto: [ mi-sitio-web       ▼ ] [🔄]           │
-│    [✏ Editor]   [💻 Terminal]   [🌐 Navegador]       │
+│    Proyecto: [ mi-sitio-web       ▼ ] [🔄] [➕]       │
+│    [✏ Editor]   [💻 Terminal]   [🌐 Navegador] [📁]   │
 ├──────────────────────────────────────────────────────┤
 │  Navegación y Proyectos                              │
 │    [🌐 Localhost]    [🗄 phpMyAdmin]    [📁 Ver htdocs] │
@@ -49,37 +49,43 @@ Desarrollado en Python con Tkinter nativo, ofrece una alternativa rápida, perso
 
 ## ✨ Características Principales
 
-### 🛡️ Detección de Servicios Robusta en 3 Capas
-A diferencia de los paneles tradicionales que dependen únicamente del archivo PID o de un script bash, este control center implementa una verificación multicapa sin falsos positivos:
-1. **Capa 1 (Archivos PID):** Lectura del archivo `.pid` y comprobación en tiempo real en `/proc/<pid>`.
-2. **Capa 2 (Inspección de Procesos):** Verificación con `pgrep` sobre procesos del sistema (`httpd`, `httpd.bin`, `apache2`, `mysqld`, `mariadbd`, `proftpd`).
-3. **Capa 3 (Sondeo TCP en Localhost):** Verificación directa de conectividad en los puertos locales (80 para Apache, 3306 para MySQL, 21 para ProFTPD).
+### 🛡️ Detección de Servicios en 3 Capas con Protección Anti-Colisión
+A diferencia de los paneles tradicionales que dependen únicamente del archivo PID o de un script bash, este control center implementa una verificación multicapa que distingue con precisión los binarios de XAMPP de los servicios del sistema:
+1. **Capa 1 (Archivos PID Verificados):** Lectura del archivo `.pid` y comprobación en `/proc/<pid>/exe` y `/proc/<pid>/cmdline` para garantizar que pertenezca a `/opt/lampp` y descartar PIDs reciclados tras reinicios.
+2. **Capa 2 (Inspección de Procesos en `/opt/lampp`):** Detección dirigida con `pgrep` sobre procesos de `/opt/lampp`, evitando falsos positivos causados por paquetes nativos de la distribución (como `apache2` o `mariadb-server`).
+3. **Capa 3 (Sondeo TCP y Detección de Conflictos):** Verificación de conectividad en los puertos locales (80, 3306, 21). Si un puerto responde pero no pertenece a XAMPP, la interfaz advierte inmediatamente: **`⚠️ Conflicto`**.
 
 ### 🎛️ Máquina de Estados y Botones Inteligentes
-- **Estados Dinámicos:** Los botones se adaptan al estado real del servicio (se desactiva *Iniciar* si ya está corriendo; se desactivan *Detener* y *Reiniciar* si está inactivo).
+- **Estados Dinámicos:** Los botones se adaptan al estado real del servicio (se desactiva *Iniciar* si ya está corriendo; se desactivan *Detener* y *Reiniciar* si está inactivo o en conflicto ajeno).
 - **Prevención de Concurrencia:** Bloqueo reactivo de botones durante la ejecución de tareas para evitar colisiones entre comandos.
 - **Acciones Globales Atómicas:** Permite iniciar, detener o reiniciar todos los servicios con una sola solicitud de credenciales Polkit (`pkexec`).
 
 ### 📂 Gestor Integrado de Proyectos (`htdocs`)
-- Escaneo automático de los proyectos ubicados en `/opt/lampp/htdocs`.
-- **Abrir en Editor:** Abre el proyecto completo en tu IDE o editor configurado (VS Code, Sublime Text, Gedit, Kate, etc.).
-- **Abrir Terminal:** Lanza una ventana de terminal con el directorio de trabajo configurado automáticamente en la carpeta del proyecto.
-- **Abrir en Navegador:** Abre `http://localhost/<proyecto>` en tu navegador predeterminado (incluye comprobación previa para alertarte si Apache no está activo).
+- **Escaneo Inteligente:** Lista las carpetas en `/opt/lampp/htdocs` filtrando automáticamente carpetas internas de sistema (como `img` o `webalizer`).
+- **Creación Rápida (`➕`):** Crea un nuevo proyecto web directamente desde la GUI con validación de seguridad contra path traversal.
+- **Abrir en Editor (`✏`):** Abre el proyecto completo en tu IDE o editor configurado (VS Code, Sublime Text, Gedit, Kate, etc.).
+- **Abrir Terminal (`💻`):** Lanza tu emulador de terminal favorito (`alacritty`, `kitty`, `gnome-terminal`, `konsole`, `tilix`, etc.) ubicado automáticamente en la raíz del proyecto.
+- **Abrir en Navegador (`🌐`):** Abre `http://localhost/<proyecto>` en tu navegador predeterminado con comprobación previa de salud de Apache.
+- **Explorar Carpeta (`📁`):** Abre la carpeta específica del proyecto en el gestor de archivos del sistema.
 
 ### ⚙️ Accesos Directos a Configuración y Logs
 - Edición inmediata en un clic de los archivos principales de XAMPP:
   - `php.ini` (`/opt/lampp/etc/php.ini`)
   - `httpd.conf` (`/opt/lampp/etc/httpd.conf`)
   - `my.cnf` (`/opt/lampp/etc/my.cnf`)
+- Detección de permisos de escritura para alertar si el archivo requiere elevación de privilegios.
 - Acceso directo a los logs del servidor web: `error_log` y `php_error_log`.
 - **Visualizador Interno de Logs:** Visor gráfico con búsqueda de texto en tiempo real con resaltado, filtrado, exportación a archivo `.log`, copia al portapapeles y rotación automática (hasta 1 MB con 5 ciclos de respaldo).
 
-### 🎨 Temas y Personalización
-- **Modos Oscuro y Claro:** Paleta moderna inspirada en temas modernos (Catppuccin), garantizando legibilidad y contraste.
-- **Intervalo de Monitoreo Configurable:** Refresco automático cada 2, 4, 8 o 15 segundos en hilos secundarios (sin congelar la interfaz).
-- **Selector de Editor:** Detección de editores instalados (`code`, `subl`, `gedit`, `kate`, `xed`, `mousepad`, `nano`, `vi`).
-- **Autostart Silencioso:** Opción para arrancar los servicios automáticamente al abrir la aplicación.
-- **Visibilidad Selectiva:** Permite ocultar servicios no utilizados (por ejemplo, ProFTPD).
+### 🎨 Temas, Ergonomía y Atajos de Teclado
+- **Modos Oscuro y Claro:** Paleta moderna inspirada en Catppuccin, garantizando legibilidad y contraste.
+- **Centrado Automático:** La ventana principal se posiciona perfectamente centrada en el monitor del usuario al iniciar.
+- **Atajos de Teclado Globales:**
+  - `F5` / `Ctrl+R`: Actualizar estado de servicios y lista de proyectos.
+  - `Ctrl+Q` / `Ctrl+W`: Cerrar la aplicación de manera ordenada.
+  - `Ctrl+Shift+S`: Iniciar todos los servicios.
+  - `Ctrl+Shift+X`: Detener todos los servicios.
+- **Rendimiento Optimizado:** Caché de versión de PHP para evitar crear procesos hijo innecesarios cada 4 segundos.
 
 ### 🔒 Seguridad Endurecida
 - **Zero Shell Injection:** Todas las llamadas al sistema usan listas de argumentos con `subprocess.run(shell=False)`.
