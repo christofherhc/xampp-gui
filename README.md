@@ -132,6 +132,38 @@ Sistema de protección contra pérdidas de datos y errores de configuración:
 - **Inspección de Módulos:** Muestra la versión exacta del compilador, motor Zend y cantidad de extensiones activas.
 - **Lanzador de Terminal Aislado:** Abre tu terminal favorita con `export PATH="<dir_php>:$PATH"`, permitiéndote ejecutar herramientas de línea de comandos (`composer`, `artisan`, `symfony`, `wp-cli`) con la versión específica de PHP que requiere cada proyecto.
 
+### ⚡ Benchmark de Servidor y Pruebas de Carga (ApacheBench)
+Permite auditar el rendimiento y capacidad de respuesta de tus aplicaciones web en Apache:
+- **Ejecución Integrada:** Lanza `/opt/lampp/bin/ab` en segundo plano sin congelar la interfaz gráfica.
+- **Métricas Clave:** Analiza automáticamente peticiones por segundo (RPS), latencia media (ms), tasa de transferencia (KB/s) y conteo de peticiones fallidas.
+- **Reporte Completo:** Muestra el desglose detallado con percentiles de latencia y opción de copiar al portapapeles en 1 clic.
+
+### 🌍 Compartir Proyecto en Internet (Túnel SSH con HTTPS Instantáneo)
+Comparte tu servidor local con clientes o prueba webhooks externos (Stripe, PayPal, MercadoPago, GitHub) sin instalar herramientas de terceros como ngrok:
+- **Túnel SSH Nativo:** Utiliza el cliente SSH preinstalado en Linux Mint conectando con `nokey@localhost.run` mediante reenvío de puertos reverso (`-R 80:localhost:80`).
+- **Detección Automática de URL:** Extrae la URL pública segura (`https://...lhr.life`) y permite copiarla o abrirla en el navegador con un solo clic.
+- **Control de Proceso Limpio:** Permite iniciar y detener el túnel en cualquier momento con terminación segura de procesos.
+
+### 📜 Monitor en Vivo de Logs (Live Tail en Tiempo Real)
+Monitorea continuamente la actividad de Apache y errores de PHP con flujo continuo tipo `tail -f`:
+- **Selector de Origen:** Alterna en vivo entre `Apache Error Log`, `PHP Error Log`, `Apache Access Log` y el `Log de la Aplicación`.
+- **Resaltado de Sintaxis por Severidad:**
+  - 🔴 **Rojo/Negrita:** Errores fatales, excepciones y fallos críticos.
+  - 🟠 **Naranja:** Advertencias (`Warning`), avisos (`Notice`) y funciones en desuso (`Deprecated`).
+  - 🔵 **Azul:** Mensajes informativos del servidor.
+- **Filtro y Pausa:** Filtrado por palabra clave en tiempo real y botón para pausar/reanudar el flujo de datos.
+
+### 🛠️ Editor y Asistente de Reglas `.htaccess`
+Herramienta visual para configurar directivas avanzadas de Apache a nivel de proyecto:
+- **Detección Inteligente de Raíz:** Localiza automáticamente `.htaccess` en la raíz del proyecto o dentro de `/public` (para proyectos Laravel).
+- **Plantillas Listas para Usar:** Inserta con un clic fragmentos probados para:
+  - Enrutamiento de aplicaciones SPA (React, Vue, Angular).
+  - Forzar redirección HTTPS automática.
+  - Habilitar cabeceras CORS (`Access-Control-Allow-Origin`).
+  - Cabeceras de seguridad (`X-Frame-Options`, `X-Content-Type-Options`, `X-XSS-Protection`).
+  - Desactivar listado de directorios (`Options -Indexes`).
+- **Respaldo Automático:** Genera automáticamente una copia `.bak` antes de escribir cualquier cambio.
+
 ### ⚙️ Accesos Directos a Configuración y Logs
 - Edición inmediata en un clic de los archivos principales de XAMPP:
   - `php.ini` (`/opt/lampp/etc/php.ini`)

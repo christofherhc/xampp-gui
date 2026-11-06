@@ -509,6 +509,11 @@ class XamppGUI:
         tools_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Herramientas", menu=tools_menu)
         tools_menu.add_command(label="Monitor de recursos en vivo (CPU/RAM)...", command=self.show_performance_monitor)
+        tools_menu.add_command(label="Benchmark de rendimiento (ApacheBench)...", command=self.show_benchmark_dialog)
+        tools_menu.add_command(label="Compartir proyecto en Internet (Túnel)...", command=self.show_tunnel_dialog)
+        tools_menu.add_command(label="Monitor en vivo de logs (Live Tail)...", command=self.show_live_log_tail)
+        tools_menu.add_command(label="Editor de reglas .htaccess...", command=self.show_htaccess_editor)
+        tools_menu.add_separator()
         tools_menu.add_command(label="Entornos de PHP del sistema (CLI)...", command=self.show_php_environments_dialog)
         tools_menu.add_separator()
         tools_menu.add_command(label="Diagnosticar conflicto de puertos...", command=self.show_conflict_resolver)
@@ -1430,16 +1435,19 @@ class XamppGUI:
     def show_about(self):
         installed = ", ".join(SERVICES.keys()) if SERVICES else "ninguno"
         messagebox.showinfo("Acerca de",
-                           "XAMPP Control Center v2.5\n\n"
+                           "XAMPP Control Center v2.6\n\n"
                            "Suite gráfica avanzada para administrar XAMPP en Linux (Mint, Ubuntu, Debian).\n\n"
                            f"Servicios detectados: {installed}\n"
-                           "Características v2.5:\n"
+                           "Características v2.6:\n"
+                           "• Benchmark de rendimiento y pruebas de carga con ApacheBench (ab)\n"
+                           "• Compartir proyectos a Internet vía Túnel SSH seguro\n"
+                           "• Monitor de logs en vivo (Live Tail) con coloreado sintáctico\n"
+                           "• Editor visual y plantillas de reglas .htaccess\n"
                            "• Generador de Certificados SSL y soporte HTTPS local\n"
                            "• Monitor de Rendimiento en Tiempo Real (CPU, RAM y conexiones)\n"
                            "• Gestor de Snapshots y Puntos de Restauración con 1-clic Rollback\n"
                            "• Selector de Entornos PHP Multi-Versión y lanzador CLI\n"
-                           "• Administrador de Virtual Hosts y resolución de conflictos de puertos\n"
-                           "• Integración completa con el escritorio Linux Mint (SVG + .desktop)")
+                           "• Administrador de Virtual Hosts y resolución de conflictos de puertos")
 
     def _port_open(self, host, port, timeout=1.0):
         """Comprueba si un puerto responde en localhost."""
@@ -3537,6 +3545,530 @@ class XamppGUI:
 
         tk.Button(win, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
                   font=("Helvetica", 9), command=win.destroy).pack(pady=8)
+
+    # =========================================================================
+    # v2.6: Benchmark (ab), Túnel SSH Público, Live Log Tail y Editor .htaccess
+    # =========================================================================
+
+    def show_benchmark_dialog(self):
+        """Herramienta de benchmark y pruebas de carga con ApacheBench (ab)."""
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Benchmark de Servidor (ApacheBench)")
+        win.geometry("560x540")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        tk.Label(win, text="Auditoría de Rendimiento con ApacheBench", font=("Helvetica", 12, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(pady=(12, 6))
+
+        ab_bin = "/opt/lampp/bin/ab"
+        if not os.path.isfile(ab_bin):
+            ab_bin = shutil.which("ab") or ab_bin
+
+        frame_top = tk.Frame(win, bg=t["bg"], padx=15)
+        frame_top.pack(fill="x")
+
+        tk.Label(frame_top, text="URL objetivo a evaluar:", font=("Helvetica", 9),
+                 bg=t["bg"], fg=t["fg"]).grid(row=0, column=0, sticky="w", pady=2)
+        
+        default_url = "http://localhost/"
+        selected_proj = self.project_var.get().strip() if hasattr(self, "project_var") else ""
+        if selected_proj:
+            default_url = f"http://localhost/{selected_proj}/"
+
+        ent_url = tk.Entry(frame_top, width=44, font=("Helvetica", 9))
+        ent_url.grid(row=1, column=0, columnspan=3, sticky="we", pady=(0, 6))
+        ent_url.insert(0, default_url)
+
+        tk.Label(frame_top, text="Total Peticiones (-n):", font=("Helvetica", 9),
+                 bg=t["bg"], fg=t["fg"]).grid(row=2, column=0, sticky="w", pady=2)
+        ent_n = tk.Entry(frame_top, width=12, font=("Helvetica", 9))
+        ent_n.grid(row=3, column=0, sticky="w", pady=(0, 6))
+        ent_n.insert(0, "100")
+
+        tk.Label(frame_top, text="Concurrencia (-c):", font=("Helvetica", 9),
+                 bg=t["bg"], fg=t["fg"]).grid(row=2, column=1, sticky="w", pady=2)
+        ent_c = tk.Entry(frame_top, width=12, font=("Helvetica", 9))
+        ent_c.grid(row=3, column=1, sticky="w", pady=(0, 6))
+        ent_c.insert(0, "10")
+
+        res_card = tk.Frame(win, bg=t["bg_secondary"], padx=12, pady=10, highlightbackground="#313244", highlightthickness=1)
+        res_card.pack(fill="x", padx=15, pady=8)
+
+        lbl_summary = tk.Label(res_card, text="Configura los parámetros y pulsa 'Ejecutar Benchmark'.",
+                               font=("Helvetica", 9), bg=t["bg_secondary"], fg=t["fg"], justify="left")
+        lbl_summary.pack(anchor="w")
+
+        tk.Label(win, text="Reporte Detallado de ApacheBench:", font=("Helvetica", 9, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(anchor="w", padx=15, pady=(4, 2))
+
+        txt_report = scrolledtext.ScrolledText(win, height=10, font=("Monospace", 8),
+                                              bg=t["bg_secondary"], fg=t["fg"])
+        txt_report.pack(fill="both", expand=True, padx=15, pady=(0, 8))
+
+        def run_bench():
+            url = ent_url.get().strip()
+            num_req = ent_n.get().strip() or "100"
+            concurr = ent_c.get().strip() or "10"
+
+            if not url.startswith("http://") and not url.startswith("https://"):
+                messagebox.showerror("URL inválida", "La URL debe comenzar con http:// o https://")
+                return
+
+            if not os.path.isfile(ab_bin):
+                messagebox.showerror("ab no encontrado", f"No se encontró ApacheBench en {ab_bin}")
+                return
+
+            btn_run.configure(state="disabled", text="⏳ Evaluando...")
+            lbl_summary.configure(text=f"Ejecutando {num_req} peticiones concurrentes a {url}...", fg=t["fg_label"])
+            txt_report.delete("1.0", tk.END)
+
+            def worker():
+                try:
+                    cmd = [ab_bin, "-n", str(num_req), "-c", str(concurr), url]
+                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                    out = res.stdout + res.stderr
+
+                    m_rps = re.search(r'Requests per second:\s+([0-9.]+)', out)
+                    m_lat = re.search(r'Time per request:\s+([0-9.]+)\s+\[ms\]\s+\(mean\)', out)
+                    m_rate = re.search(r'Transfer rate:\s+([0-9.]+)\s+\[Kbytes/sec\]', out)
+                    m_fail = re.search(r'Failed requests:\s+([0-9]+)', out)
+
+                    rps = m_rps.group(1) if m_rps else "N/D"
+                    lat = m_lat.group(1) if m_lat else "N/D"
+                    rate = m_rate.group(1) if m_rate else "N/D"
+                    fail = m_fail.group(1) if m_fail else "0"
+
+                    summary_txt = (
+                        f"🚀 Rendimiento: {rps} peticiones/seg (RPS)\n"
+                        f"⏱ Latencia Media: {lat} ms\n"
+                        f"📦 Tasa de Transferencia: {rate} KB/s\n"
+                        f"❌ Peticiones Fallidas: {fail}"
+                    )
+
+                    def update_ui():
+                        lbl_summary.configure(text=summary_txt, fg=t["fg_active"] if fail == "0" else t.get("fg_conflict", "#fab387"))
+                        txt_report.insert(tk.END, out)
+                        btn_run.configure(state="normal", text="⚡ Ejecutar Benchmark")
+                        self.send_notification("Benchmark completado con éxito")
+                        write_log(f"Benchmark ejecutado en {url}: {rps} RPS")
+
+                    self.safe_after(0, update_ui)
+
+                except Exception as ex:
+                    self.safe_after(0, lambda: (
+                        lbl_summary.configure(text=f"Error en benchmark: {ex}", fg=t["fg_inactive"]),
+                        btn_run.configure(state="normal", text="⚡ Ejecutar Benchmark"),
+                        write_log(f"Error ejecutando ab: {ex}")
+                    ))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        btn_bar = tk.Frame(win, bg=t["bg"])
+        btn_bar.pack(fill="x", padx=15, pady=(0, 10))
+
+        btn_run = tk.Button(btn_bar, text="⚡ Ejecutar Benchmark", bg=t["btn_start"], fg="white",
+                            font=("Helvetica", 9, "bold"), command=run_bench)
+        btn_run.pack(side="left", padx=3)
+
+        def copy_rep():
+            win.clipboard_clear()
+            win.clipboard_append(txt_report.get("1.0", tk.END))
+            self.send_notification("Reporte copiado al portapapeles")
+
+        tk.Button(btn_bar, text="📋 Copiar Reporte", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=copy_rep).pack(side="left", padx=3)
+        tk.Button(btn_bar, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=win.destroy).pack(side="right", padx=3)
+
+    def show_tunnel_dialog(self):
+        """Expone el servidor local a Internet mediante un túnel público seguro (SSH)."""
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Compartir Proyecto en Internet (Túnel Público)")
+        win.geometry("520x400")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        tk.Label(win, text="Compartir Servidor Local en Internet", font=("Helvetica", 12, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(pady=(12, 6))
+
+        card = tk.Frame(win, bg=t["bg_secondary"], padx=15, pady=12, highlightbackground="#313244", highlightthickness=1)
+        card.pack(fill="both", expand=True, padx=15, pady=8)
+
+        tk.Label(card, text="Permite probar webhooks (Stripe/PayPal), APIs externas y mostrar avances\n"
+                            "a clientes conectando tu localhost a una URL pública HTTPS temporal.",
+                 font=("Helvetica", 9), bg=t["bg_secondary"], fg=t["fg"], justify="left").pack(anchor="w", pady=(0, 10))
+
+        lbl_status = tk.Label(card, text="● Estado: Desconectado", font=("Helvetica", 10, "bold"),
+                              bg=t["bg_secondary"], fg=t["fg_inactive"])
+        lbl_status.pack(anchor="w", pady=4)
+
+        ent_url = tk.Entry(card, width=42, font=("Monospace", 9))
+        ent_url.pack(fill="x", pady=6)
+        ent_url.insert(0, "Inicia el túnel para obtener la URL pública...")
+        ent_url.configure(state="readonly")
+
+        txt_log = scrolledtext.ScrolledText(card, height=5, font=("Monospace", 8),
+                                            bg=t["bg"], fg=t["fg"])
+        txt_log.pack(fill="both", expand=True, pady=6)
+
+        tunnel_state = getattr(self, "_tunnel_state", {"proc": None, "url": ""})
+        self._tunnel_state = tunnel_state
+
+        def start_tunnel():
+            ssh_bin = shutil.which("ssh") or "/usr/bin/ssh"
+            if not os.path.isfile(ssh_bin):
+                messagebox.showerror("Error", "No se encontró el comando 'ssh' en el sistema.")
+                return
+
+            btn_start.configure(state="disabled")
+            btn_stop.configure(state="normal")
+            lbl_status.configure(text="● Conectando túnel...", fg=t.get("fg_conflict", "#fab387"))
+
+            def worker():
+                try:
+                    cmd = [
+                        ssh_bin, "-R", "80:localhost:80",
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "ServerAliveInterval=60",
+                        "nokey@localhost.run"
+                    ]
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                    tunnel_state["proc"] = proc
+
+                    for line in iter(proc.stdout.readline, ''):
+                        txt_log.insert(tk.END, line)
+                        txt_log.see(tk.END)
+
+                        m = re.search(r'(https://[a-zA-Z0-9.-]+\.lhr\.life|https://[a-zA-Z0-9.-]+\.localhost\.run)', line)
+                        if m and not tunnel_state.get("url"):
+                            found_url = m.group(1)
+                            tunnel_state["url"] = found_url
+
+                            def on_connected(u=found_url):
+                                lbl_status.configure(text="● Conectado (Túnel activo)", fg=t["fg_active"])
+                                ent_url.configure(state="normal")
+                                ent_url.delete(0, tk.END)
+                                ent_url.insert(0, u)
+                                ent_url.configure(state="readonly")
+                                btn_copy.configure(state="normal")
+                                btn_open.configure(state="normal")
+                                self.send_notification("Túnel público activo: " + u)
+                                write_log(f"Túnel público activo en {u}")
+
+                            self.safe_after(0, on_connected)
+
+                    proc.wait()
+                except Exception as ex:
+                    write_log(f"Error en túnel SSH: {ex}")
+                finally:
+                    def on_finish():
+                        tunnel_state["proc"] = None
+                        tunnel_state["url"] = ""
+                        lbl_status.configure(text="● Estado: Desconectado", fg=t["fg_inactive"])
+                        btn_start.configure(state="normal")
+                        btn_stop.configure(state="disabled")
+                        btn_copy.configure(state="disabled")
+                        btn_open.configure(state="disabled")
+                    self.safe_after(0, on_finish)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def stop_tunnel():
+            if tunnel_state.get("proc"):
+                try:
+                    tunnel_state["proc"].terminate()
+                except Exception:
+                    pass
+                tunnel_state["proc"] = None
+                tunnel_state["url"] = ""
+                lbl_status.configure(text="● Estado: Desconectado", fg=t["fg_inactive"])
+                btn_start.configure(state="normal")
+                btn_stop.configure(state="disabled")
+
+        def copy_url():
+            u = tunnel_state.get("url")
+            if u:
+                win.clipboard_clear()
+                win.clipboard_append(u)
+                self.send_notification("URL del túnel copiada al portapapeles")
+
+        def open_url():
+            u = tunnel_state.get("url")
+            if u:
+                webbrowser.open(u)
+
+        btn_bar = tk.Frame(win, bg=t["bg"])
+        btn_bar.pack(fill="x", padx=15, pady=(4, 12))
+
+        btn_start = tk.Button(btn_bar, text="▶ Iniciar Túnel", bg=t["btn_start"], fg="white",
+                              font=("Helvetica", 9, "bold"), command=start_tunnel)
+        btn_start.pack(side="left", padx=3)
+
+        btn_stop = tk.Button(btn_bar, text="⏹ Detener Túnel", bg=t["btn_stop"], fg="white",
+                             font=("Helvetica", 9), state="disabled", command=stop_tunnel)
+        btn_stop.pack(side="left", padx=3)
+
+        btn_copy = tk.Button(btn_bar, text="📋 Copiar URL", bg=t["bg_button"], fg=t["fg"],
+                             font=("Helvetica", 8), state="disabled", command=copy_url)
+        btn_copy.pack(side="left", padx=3)
+
+        btn_open = tk.Button(btn_bar, text="🌐 Abrir", bg=t["bg_button"], fg=t["fg"],
+                             font=("Helvetica", 8), state="disabled", command=open_url)
+        btn_open.pack(side="left", padx=3)
+
+        tk.Button(btn_bar, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=win.destroy).pack(side="right", padx=3)
+
+    def show_live_log_tail(self):
+        """Monitor de streaming de logs de Apache y PHP en tiempo real (Live Tail)."""
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Monitor en Vivo de Logs (Live Tail)")
+        win.geometry("680x500")
+        win.minsize(580, 400)
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        top_bar = tk.Frame(win, bg=t["bg"], padx=12, pady=8)
+        top_bar.pack(fill="x")
+
+        tk.Label(top_bar, text="Archivo de log:", font=("Helvetica", 9, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(side="left", padx=(0, 6))
+
+        log_choices = {
+            "Apache Error Log": "/opt/lampp/logs/error_log",
+            "PHP Error Log": "/opt/lampp/logs/php_error_log",
+            "Apache Access Log": "/opt/lampp/logs/access_log",
+            "Log de la Aplicación": LOG_PATH
+        }
+
+        combo_log = ttk.Combobox(top_bar, values=list(log_choices.keys()), state="readonly", width=22)
+        combo_log.pack(side="left", padx=4)
+        combo_log.set("Apache Error Log")
+
+        tk.Label(top_bar, text="Filtro:", font=("Helvetica", 9), bg=t["bg"], fg=t["fg"]).pack(side="left", padx=(10, 4))
+        ent_filter = tk.Entry(top_bar, width=15, font=("Helvetica", 9))
+        ent_filter.pack(side="left")
+
+        txt_tail = scrolledtext.ScrolledText(win, bg=t["bg_secondary"], fg=t["fg"],
+                                             font=("Monospace", 9), padx=8, pady=8)
+        txt_tail.pack(fill="both", expand=True, padx=12, pady=4)
+
+        txt_tail.tag_configure("tag_err", foreground="#f38ba8", font=("Monospace", 9, "bold"))
+        txt_tail.tag_configure("tag_warn", foreground="#fab387")
+        txt_tail.tag_configure("tag_info", foreground="#89b4fa")
+        txt_tail.tag_configure("tag_norm", foreground=t["fg"])
+
+        state = {"active": True, "paused": False}
+
+        def on_close():
+            state["active"] = False
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
+        def tail_worker():
+            import time
+            selected_key = combo_log.get() if hasattr(combo_log, "get") else "Apache Error Log"
+            current_target = log_choices.get(selected_key, "/opt/lampp/logs/error_log")
+            f = None
+            try:
+                if os.path.isfile(current_target):
+                    f = open(current_target, "r", encoding="utf-8", errors="replace")
+                    f.seek(0, os.SEEK_END)
+            except Exception:
+                pass
+
+            last_choice = selected_key
+
+            while state.get("active", False):
+                new_choice = combo_log.get() if hasattr(combo_log, "get") else "Apache Error Log"
+                if new_choice != last_choice:
+                    last_choice = new_choice
+                    current_target = log_choices.get(new_choice, "/opt/lampp/logs/error_log")
+                    if f:
+                        try:
+                            f.close()
+                        except Exception:
+                            pass
+                    try:
+                        if os.path.isfile(current_target):
+                            f = open(current_target, "r", encoding="utf-8", errors="replace")
+                            f.seek(0, os.SEEK_END)
+                    except Exception:
+                        pass
+                    txt_tail.delete("1.0", tk.END)
+
+                if not state["paused"] and f:
+                    line = f.readline()
+                    if line:
+                        query = ent_filter.get().strip().lower()
+                        if not query or query in line.lower():
+                            lower_l = line.lower()
+                            if any(k in lower_l for k in ("error", "fatal", "uncaught", "exception")):
+                                tag = "tag_err"
+                            elif any(k in lower_l for k in ("warning", "notice", "deprecated")):
+                                tag = "tag_warn"
+                            elif any(k in lower_l for k in ("notice", "info")):
+                                tag = "tag_info"
+                            else:
+                                tag = "tag_norm"
+
+                            def insert_line(l=line, tg=tag):
+                                if win.winfo_exists():
+                                    txt_tail.insert(tk.END, l, tg)
+                                    txt_tail.see(tk.END)
+
+                            self.safe_after(0, insert_line)
+                    else:
+                        time.sleep(0.4)
+                else:
+                    time.sleep(0.4)
+
+            if f:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+
+        threading.Thread(target=tail_worker, daemon=True).start()
+
+        btn_bar = tk.Frame(win, bg=t["bg"], padx=12, pady=8)
+        btn_bar.pack(fill="x")
+
+        def toggle_pause():
+            state["paused"] = not state["paused"]
+            btn_pause.configure(text="▶ Reanudar" if state["paused"] else "⏸ Pausar")
+
+        btn_pause = tk.Button(btn_bar, text="⏸ Pausar", bg=t["bg_button"], fg=t["fg"],
+                              font=("Helvetica", 9), command=toggle_pause)
+        btn_pause.pack(side="left", padx=3)
+
+        def clear_txt():
+            txt_tail.delete("1.0", tk.END)
+
+        tk.Button(btn_bar, text="🧹 Limpiar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=clear_txt).pack(side="left", padx=3)
+
+        tk.Button(btn_bar, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=on_close).pack(side="right", padx=3)
+
+    def show_htaccess_editor(self):
+        """Editor y asistente de plantillas de configuración .htaccess para el proyecto actual."""
+        t = THEMES[self.current_theme]
+        proj_path = self.get_selected_project()
+        if not proj_path:
+            return
+
+        htaccess_path = os.path.join(proj_path, ".htaccess")
+        if os.path.isdir(os.path.join(proj_path, "public")) and os.path.isfile(os.path.join(proj_path, "public", ".htaccess")):
+            htaccess_path = os.path.join(proj_path, "public", ".htaccess")
+
+        win = tk.Toplevel(self.root)
+        win.title(f"Editor .htaccess - {os.path.basename(proj_path)}")
+        win.geometry("620x500")
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        top_f = tk.Frame(win, bg=t["bg"], padx=12, pady=6)
+        top_f.pack(fill="x")
+
+        tk.Label(top_f, text=f"Archivo: {htaccess_path}", font=("Monospace", 8),
+                 bg=t["bg"], fg=t["fg_label"]).pack(anchor="w")
+
+        snip_bar = tk.Frame(win, bg=t["bg_secondary"], padx=10, pady=6)
+        snip_bar.pack(fill="x", padx=12, pady=4)
+
+        tk.Label(snip_bar, text="Plantillas:", font=("Helvetica", 8, "bold"),
+                 bg=t["bg_secondary"], fg=t["fg"]).pack(side="left", padx=(0, 4))
+
+        txt_editor = scrolledtext.ScrolledText(win, bg=t["bg_secondary"], fg=t["fg"],
+                                               font=("Monospace", 9), padx=8, pady=8)
+        txt_editor.pack(fill="both", expand=True, padx=12, pady=4)
+
+        current_content = ""
+        if os.path.isfile(htaccess_path):
+            try:
+                with open(htaccess_path, "r", encoding="utf-8", errors="replace") as f:
+                    current_content = f.read()
+            except Exception as e:
+                write_log(f"Error leyendo {htaccess_path}: {e}")
+
+        txt_editor.insert(tk.END, current_content)
+
+        snippets = {
+            "SPA (React/Vue)": (
+                "\n# Enrutamiento SPA\n"
+                "<IfModule mod_rewrite.c>\n"
+                "    RewriteEngine On\n"
+                "    RewriteBase /\n"
+                "    RewriteRule ^index\\.html$ - [L]\n"
+                "    RewriteCond %{REQUEST_FILENAME} !-f\n"
+                "    RewriteCond %{REQUEST_FILENAME} !-d\n"
+                "    RewriteRule . index.html [L]\n"
+                "</IfModule>\n"
+            ),
+            "Forzar HTTPS": (
+                "\n# Forzar redirección HTTPS\n"
+                "<IfModule mod_rewrite.c>\n"
+                "    RewriteEngine On\n"
+                "    RewriteCond %{HTTPS} off\n"
+                "    RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]\n"
+                "</IfModule>\n"
+            ),
+            "Habilitar CORS": (
+                "\n# Habilitar CORS para APIs\n"
+                "<IfModule mod_headers.c>\n"
+                "    Header set Access-Control-Allow-Origin \"*\"\n"
+                "    Header set Access-Control-Allow-Methods \"GET, POST, OPTIONS, PUT, DELETE\"\n"
+                "    Header set Access-Control-Allow-Headers \"Content-Type, Authorization\"\n"
+                "</IfModule>\n"
+            ),
+            "Seguridad Headers": (
+                "\n# Cabeceras de Seguridad\n"
+                "<IfModule mod_headers.c>\n"
+                "    Header set X-Content-Type-Options \"nosniff\"\n"
+                "    Header set X-Frame-Options \"SAMEORIGIN\"\n"
+                "    Header set X-XSS-Protection \"1; mode=block\"\n"
+                "</IfModule>\n"
+            ),
+            "No Indexes": (
+                "\n# Desactivar listado de archivos\n"
+                "Options -Indexes\n"
+            )
+        }
+
+        for snip_name, snip_code in snippets.items():
+            tk.Button(snip_bar, text=f"+ {snip_name}", font=("Helvetica", 7, "bold"),
+                      bg=t["bg_button"], fg=t["fg"],
+                      command=lambda c=snip_code: (txt_editor.insert(tk.END, c), txt_editor.see(tk.END))).pack(side="left", padx=2)
+
+        def save_htaccess():
+            new_code = txt_editor.get("1.0", tk.END).strip() + "\n"
+            try:
+                if os.path.isfile(htaccess_path):
+                    shutil.copy2(htaccess_path, htaccess_path + ".bak")
+                with open(htaccess_path, "w", encoding="utf-8") as f:
+                    f.write(new_code)
+                self.send_notification(".htaccess guardado correctamente")
+                write_log(f"Archivo .htaccess guardado en {htaccess_path}")
+                messagebox.showinfo("Guardado", f"Archivo .htaccess guardado correctamente.\n(Se creó copia de seguridad .bak)")
+            except Exception as ex:
+                write_log(f"Error guardando .htaccess: {ex}")
+                messagebox.showerror("Error", f"No se pudo guardar .htaccess:\n{ex}")
+
+        btn_bar = tk.Frame(win, bg=t["bg"], padx=12, pady=8)
+        btn_bar.pack(fill="x")
+
+        tk.Button(btn_bar, text="💾 Guardar .htaccess", bg=t["btn_start"], fg="white",
+                  font=("Helvetica", 9, "bold"), command=save_htaccess).pack(side="left", padx=4)
+        tk.Button(btn_bar, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=win.destroy).pack(side="right", padx=4)
 
 
 LOG_MAX_BYTES = 1024 * 1024  # 1MB
