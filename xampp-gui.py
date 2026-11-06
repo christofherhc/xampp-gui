@@ -10,6 +10,7 @@ import socket
 import shutil
 import re
 from urllib.parse import quote
+import glob
 
 # Lock para sincronización de escritura y rotación de logs
 LOG_LOCK = threading.Lock()
@@ -490,6 +491,8 @@ class XamppGUI:
         config_menu.add_command(label="Abrir carpeta de logs", command=self.open_log_folder)
         config_menu.add_separator()
         config_menu.add_command(label="Administrador de Virtual Hosts...", command=self.show_vhosts_manager)
+        config_menu.add_command(label="Generador de Certificados SSL (HTTPS)...", command=self.show_ssl_manager)
+        config_menu.add_command(label="Puntos de Restauración (Snapshots)...", command=self.show_snapshots_manager)
         
         # Menú Base de Datos
         db_menu = tk.Menu(menubar, tearoff=0)
@@ -505,6 +508,9 @@ class XamppGUI:
         # Menú Herramientas
         tools_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Herramientas", menu=tools_menu)
+        tools_menu.add_command(label="Monitor de recursos en vivo (CPU/RAM)...", command=self.show_performance_monitor)
+        tools_menu.add_command(label="Entornos de PHP del sistema (CLI)...", command=self.show_php_environments_dialog)
+        tools_menu.add_separator()
         tools_menu.add_command(label="Diagnosticar conflicto de puertos...", command=self.show_conflict_resolver)
         tools_menu.add_command(label="Extensiones de PHP activas...", command=self.show_php_extensions_dialog)
         tools_menu.add_separator()
@@ -1424,12 +1430,16 @@ class XamppGUI:
     def show_about(self):
         installed = ", ".join(SERVICES.keys()) if SERVICES else "ninguno"
         messagebox.showinfo("Acerca de",
-                           "XAMPP Control Center v2.4\n\n"
+                           "XAMPP Control Center v2.5\n\n"
                            "Suite gráfica avanzada para administrar XAMPP en Linux (Mint, Ubuntu, Debian).\n\n"
                            f"Servicios detectados: {installed}\n"
-                           "Características: Detección anti-colisión, herramientas MySQL,\n"
-                           "administrador de Virtual Hosts (VHosts), asistente de conflictos,\n"
-                           "detector de frameworks (Laravel/WP) e inspector de extensiones PHP.")
+                           "Características v2.5:\n"
+                           "• Generador de Certificados SSL y soporte HTTPS local\n"
+                           "• Monitor de Rendimiento en Tiempo Real (CPU, RAM y conexiones)\n"
+                           "• Gestor de Snapshots y Puntos de Restauración con 1-clic Rollback\n"
+                           "• Selector de Entornos PHP Multi-Versión y lanzador CLI\n"
+                           "• Administrador de Virtual Hosts y resolución de conflictos de puertos\n"
+                           "• Integración completa con el escritorio Linux Mint (SVG + .desktop)")
 
     def _port_open(self, host, port, timeout=1.0):
         """Comprueba si un puerto responde en localhost."""
@@ -2819,6 +2829,715 @@ class XamppGUI:
                 messagebox.showerror("Error", f"No se pudo ejecutar install.sh:\n{e}")
         else:
             messagebox.showerror("No encontrado", f"No se encontró el script instalador:\n{install_script}")
+
+    # =========================================================================
+    # v2.5: Generador SSL (HTTPS), Monitor de Telemetría, Snapshots y PHP Multi-Versión
+    # =========================================================================
+
+    def show_ssl_manager(self):
+        """Asistente para generar certificados SSL locales y configurar HTTPS en Apache."""
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Generador de Certificados SSL (HTTPS)")
+        win.geometry("540x510")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        tk.Label(win, text="Generador de Certificados SSL y HTTPS", font=("Helvetica", 12, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(pady=(12, 6))
+
+        frame = tk.Frame(win, bg=t["bg"], padx=15)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text="Dominio o Hostname local (ej: localhost o miapp.test):", font=("Helvetica", 9),
+                 bg=t["bg"], fg=t["fg"]).grid(row=0, column=0, sticky="w", pady=4)
+        ent_domain = tk.Entry(frame, width=32, font=("Helvetica", 9))
+        ent_domain.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ent_domain.insert(0, "localhost")
+
+        tk.Label(frame, text="Días de validez:", font=("Helvetica", 9),
+                 bg=t["bg"], fg=t["fg"]).grid(row=2, column=0, sticky="w", pady=4)
+        ent_days = tk.Entry(frame, width=12, font=("Helvetica", 9))
+        ent_days.grid(row=3, column=0, sticky="w", pady=(0, 6))
+        ent_days.insert(0, "365")
+
+        var_vhost_ssl = tk.BooleanVar(value=True)
+        chk_vhost = tk.Checkbutton(frame, text="Crear VirtualHost SSL (*:443) en httpd-vhosts.conf",
+                                   variable=var_vhost_ssl, bg=t["bg"], fg=t["fg"],
+                                   selectcolor=t["bg_secondary"], activebackground=t["bg"])
+        chk_vhost.grid(row=4, column=0, columnspan=2, sticky="w", pady=4)
+
+        tk.Label(frame, text="Carpeta de proyecto (DocumentRoot):", font=("Helvetica", 9),
+                 bg=t["bg"], fg=t["fg"]).grid(row=5, column=0, sticky="w", pady=4)
+        
+        path_frame = tk.Frame(frame, bg=t["bg"])
+        path_frame.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        project_choices = getattr(self, "projects", [])
+        combo_proj = ttk.Combobox(path_frame, values=project_choices, width=22)
+        combo_proj.pack(side="left")
+
+        def on_browse():
+            from tkinter import filedialog
+            chosen = filedialog.askdirectory(initialdir=HTDOCS_PATH, title="Seleccionar DocumentRoot")
+            if chosen:
+                ent_doc.delete(0, tk.END)
+                ent_doc.insert(0, chosen)
+
+        tk.Button(path_frame, text="Examinar...", font=("Helvetica", 8), command=on_browse).pack(side="left", padx=5)
+
+        ent_doc = tk.Entry(frame, width=42, font=("Monospace", 8))
+        ent_doc.grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ent_doc.insert(0, HTDOCS_PATH)
+
+        def on_proj_change(e=None):
+            sel = combo_proj.get().strip()
+            if sel:
+                full_p = os.path.join(HTDOCS_PATH, sel)
+                if os.path.isdir(os.path.join(full_p, "public")):
+                    full_p = os.path.join(full_p, "public")
+                ent_doc.delete(0, tk.END)
+                ent_doc.insert(0, full_p)
+                if ent_domain.get().strip() in ("localhost", ""):
+                    ent_domain.delete(0, tk.END)
+                    ent_domain.insert(0, f"{sel.lower()}.test")
+
+        combo_proj.bind("<<ComboboxSelected>>", on_proj_change)
+
+        info_box = tk.Label(frame, text="", font=("Monospace", 8), bg=t["bg_secondary"],
+                            fg=t["fg"], justify="left", wraplength=480, padx=8, pady=8)
+        info_box.grid(row=8, column=0, columnspan=2, sticky="we", pady=8)
+        info_box.grid_remove()
+
+        def generate_ssl():
+            domain = ent_domain.get().strip()
+            days = ent_days.get().strip() or "365"
+            doc_root = ent_doc.get().strip()
+
+            if not domain or not re.match(r'^[a-zA-Z0-9.-]+$', domain):
+                messagebox.showerror("Dominio inválido", "Introduce un dominio válido (ej: app.test o localhost).")
+                return
+
+            openssl_bin = shutil.which("openssl") or "/usr/bin/openssl"
+            if not os.path.isfile(openssl_bin):
+                messagebox.showerror("OpenSSL no encontrado", "No se encontró el comando 'openssl' en el sistema.")
+                return
+
+            tmp_key = f"/tmp/{domain}.key"
+            tmp_crt = f"/tmp/{domain}.crt"
+
+            cmd = [
+                openssl_bin, "req", "-x509", "-nodes", "-days", str(days),
+                "-newkey", "rsa:2048",
+                "-keyout", tmp_key,
+                "-out", tmp_crt,
+                "-subj", f"/C=ES/ST=Local/L=Local/O=XAMPP-Local/CN={domain}",
+                "-addext", f"subjectAltName=DNS:{domain},DNS:localhost,IP:127.0.0.1"
+            ]
+
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                if res.returncode != 0:
+                    messagebox.showerror("Error OpenSSL", f"Falló al generar certificado:\n{res.stderr}")
+                    return
+
+                target_crt = f"/opt/lampp/etc/ssl.crt/{domain}.crt"
+                target_key = f"/opt/lampp/etc/ssl.key/{domain}.key"
+
+                for src, dst in [(tmp_crt, target_crt), (tmp_key, target_key)]:
+                    try:
+                        shutil.copy2(src, dst)
+                    except PermissionError:
+                        subprocess.run(["pkexec", "cp", src, dst], check=True, timeout=10)
+                    try:
+                        os.remove(src)
+                    except Exception:
+                        pass
+
+                if var_vhost_ssl.get():
+                    if not doc_root or not os.path.isdir(doc_root):
+                        doc_root = HTDOCS_PATH
+
+                    ssl_stanza = (
+                        f"\n# VirtualHost SSL para {domain}\n"
+                        f"<VirtualHost *:443>\n"
+                        f"    ServerName {domain}\n"
+                        f"    DocumentRoot \"{doc_root}\"\n"
+                        f"    SSLEngine on\n"
+                        f"    SSLCertificateFile \"{target_crt}\"\n"
+                        f"    SSLCertificateKeyFile \"{target_key}\"\n"
+                        f"    <Directory \"{doc_root}\">\n"
+                        f"        Options Indexes FollowSymLinks MultiViews\n"
+                        f"        AllowOverride All\n"
+                        f"        Require all granted\n"
+                        f"    </Directory>\n"
+                        f"</VirtualHost>\n"
+                    )
+
+                    vhosts_file = "/opt/lampp/etc/extra/httpd-vhosts.conf"
+                    if not self._is_vhosts_enabled():
+                        self._enable_vhosts_in_httpd_conf()
+
+                    try:
+                        with open(vhosts_file, "a", encoding="utf-8") as vf:
+                            vf.write(ssl_stanza)
+                    except PermissionError:
+                        tmp_vh = "/tmp/vhost_ssl.tmp"
+                        curr = ""
+                        if os.path.isfile(vhosts_file):
+                            with open(vhosts_file, "r", encoding="utf-8", errors="replace") as f:
+                                curr = f.read()
+                        with open(tmp_vh, "w", encoding="utf-8") as f:
+                            f.write(curr + ssl_stanza)
+                        subprocess.run(["pkexec", "cp", tmp_vh, vhosts_file], check=True, timeout=15)
+                        try:
+                            os.remove(tmp_vh)
+                        except Exception:
+                            pass
+
+                trust_cmd = f"sudo cp {target_crt} /usr/local/share/ca-certificates/{domain}.crt && sudo update-ca-certificates"
+                info_text = f"✔ Certificado generado en:\n  {target_crt}\n  {target_key}\n\nPara confiar en este certificado en Linux Mint:\n{trust_cmd}"
+                info_box.configure(text=info_text)
+                info_box.grid()
+
+                self.send_notification(f"Certificado SSL generado para {domain}")
+                write_log(f"Certificado SSL para {domain} generado exitosamente.")
+                
+                if messagebox.askyesno("Éxito", f"Certificado para '{domain}' generado.\n\n¿Deseas reiniciar Apache ahora para cargar SSL?"):
+                    self.run_service("restart", "apache")
+
+            except Exception as ex:
+                write_log(f"Error generando certificado SSL: {ex}")
+                messagebox.showerror("Error", f"No se pudo generar el certificado:\n{ex}")
+
+        btn_box = tk.Frame(win, bg=t["bg"])
+        btn_box.pack(pady=10)
+
+        tk.Button(btn_box, text="🔐 Generar Certificado SSL", bg=t["btn_start"], fg="white",
+                  font=("Helvetica", 9, "bold"), command=generate_ssl).pack(side="left", padx=5)
+        tk.Button(btn_box, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=win.destroy).pack(side="left", padx=5)
+
+    def _collect_resource_telemetry(self):
+        """Recolecta métricas en vivo de CPU, RAM RSS y conexiones de XAMPP."""
+        data = {
+            "apache": {"count": 0, "rss_mb": 0.0, "cpu_pct": 0.0},
+            "mysql": {"count": 0, "rss_mb": 0.0, "cpu_pct": 0.0, "threads": "N/D", "uptime": "N/D", "queries": "N/D"},
+            "proftpd": {"count": 0, "rss_mb": 0.0, "cpu_pct": 0.0},
+            "total_rss_mb": 0.0
+        }
+
+        try:
+            res = subprocess.run(["ps", "-e", "-o", "pid,rss,%cpu,comm"], capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                for line in res.stdout.splitlines()[1:]:
+                    parts = line.strip().split(None, 3)
+                    if len(parts) >= 4:
+                        try:
+                            pid = int(parts[0])
+                            rss_kb = float(parts[1])
+                            cpu_val = float(parts[2])
+                            comm = parts[3].lower()
+
+                            if not _is_lampp_pid(pid):
+                                continue
+
+                            rss_mb = rss_kb / 1024.0
+
+                            if any(k in comm for k in ("httpd", "apache2")):
+                                data["apache"]["count"] += 1
+                                data["apache"]["rss_mb"] += rss_mb
+                                data["apache"]["cpu_pct"] += cpu_val
+                            elif "mysqld" in comm:
+                                data["mysql"]["count"] += 1
+                                data["mysql"]["rss_mb"] += rss_mb
+                                data["mysql"]["cpu_pct"] += cpu_val
+                            elif "proftpd" in comm:
+                                data["proftpd"]["count"] += 1
+                                data["proftpd"]["rss_mb"] += rss_mb
+                                data["proftpd"]["cpu_pct"] += cpu_val
+                        except (ValueError, IndexError):
+                            continue
+        except Exception as e:
+            write_log(f"Error recolectando telemetría de procesos: {e}")
+
+        if self._port_open("127.0.0.1", 3306) and data["mysql"]["count"] > 0:
+            mysql_bin = self._get_mysql_bin("mysql")
+            try:
+                cmd = [mysql_bin, "-u", "root", "-e", "SHOW STATUS WHERE Variable_name IN ('Threads_connected','Uptime','Queries');"]
+                res_m = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                if res_m.returncode == 0:
+                    for line in res_m.stdout.splitlines():
+                        if "Threads_connected" in line:
+                            data["mysql"]["threads"] = line.split()[-1]
+                        elif "Uptime" in line:
+                            secs = int(line.split()[-1])
+                            h = secs // 3600
+                            m = (secs % 3600) // 60
+                            s = secs % 60
+                            data["mysql"]["uptime"] = f"{h}h {m}m {s}s"
+                        elif "Queries" in line:
+                            data["mysql"]["queries"] = line.split()[-1]
+            except Exception:
+                pass
+
+        data["total_rss_mb"] = data["apache"]["rss_mb"] + data["mysql"]["rss_mb"] + data["proftpd"]["rss_mb"]
+        return data
+
+    def show_performance_monitor(self):
+        """Muestra el monitor de recursos y telemetría en tiempo real de XAMPP."""
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Monitor de Rendimiento en Vivo (CPU / RAM)")
+        win.geometry("520x460")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        tk.Label(win, text="Monitor de Recursos de XAMPP", font=("Helvetica", 12, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(pady=(12, 6))
+
+        container = tk.Frame(win, bg=t["bg"], padx=15)
+        container.pack(fill="both", expand=True)
+
+        card_ap = tk.Frame(container, bg=t["bg_secondary"], padx=10, pady=8, highlightbackground="#313244", highlightthickness=1)
+        card_ap.pack(fill="x", pady=4)
+        lbl_ap_title = tk.Label(card_ap, text="🌐 Servidor Apache", font=("Helvetica", 10, "bold"), bg=t["bg_secondary"], fg=t["fg_label"])
+        lbl_ap_title.pack(anchor="w")
+        lbl_ap_stats = tk.Label(card_ap, text="Cargando telemetría...", font=("Helvetica", 9), bg=t["bg_secondary"], fg=t["fg"], justify="left")
+        lbl_ap_stats.pack(anchor="w", pady=(2, 0))
+
+        card_my = tk.Frame(container, bg=t["bg_secondary"], padx=10, pady=8, highlightbackground="#313244", highlightthickness=1)
+        card_my.pack(fill="x", pady=4)
+        lbl_my_title = tk.Label(card_my, text="🐬 Servidor MySQL / MariaDB", font=("Helvetica", 10, "bold"), bg=t["bg_secondary"], fg=t["fg_label"])
+        lbl_my_title.pack(anchor="w")
+        lbl_my_stats = tk.Label(card_my, text="Cargando telemetría...", font=("Helvetica", 9), bg=t["bg_secondary"], fg=t["fg"], justify="left")
+        lbl_my_stats.pack(anchor="w", pady=(2, 0))
+
+        card_ftp = tk.Frame(container, bg=t["bg_secondary"], padx=10, pady=8, highlightbackground="#313244", highlightthickness=1)
+        card_ftp.pack(fill="x", pady=4)
+        lbl_ftp_title = tk.Label(card_ftp, text="📁 Servidor ProFTPD", font=("Helvetica", 10, "bold"), bg=t["bg_secondary"], fg=t["fg_label"])
+        lbl_ftp_title.pack(anchor="w")
+        lbl_ftp_stats = tk.Label(card_ftp, text="Cargando telemetría...", font=("Helvetica", 9), bg=t["bg_secondary"], fg=t["fg"], justify="left")
+        lbl_ftp_stats.pack(anchor="w", pady=(2, 0))
+
+        tot_frame = tk.Frame(container, bg=t["bg"], pady=6)
+        tot_frame.pack(fill="x", pady=4)
+        lbl_total = tk.Label(tot_frame, text="Memoria RAM total ocupada por XAMPP: 0.0 MB", font=("Helvetica", 9, "bold"), bg=t["bg"], fg=t["fg"])
+        lbl_total.pack(anchor="w")
+
+        is_active_ref = [True]
+
+        def update_metrics():
+            if not is_active_ref[0] or not win.winfo_exists():
+                return
+            data = self._collect_resource_telemetry()
+
+            ap = data["apache"]
+            txt_ap = f"Procesos (Workers): {ap['count']}  |  RAM: {ap['rss_mb']:.1f} MB  |  CPU: {ap['cpu_pct']:.1f}%"
+            lbl_ap_stats.configure(text=txt_ap)
+
+            my = data["mysql"]
+            txt_my = f"Procesos: {my['count']}  |  RAM: {my['rss_mb']:.1f} MB  |  CPU: {my['cpu_pct']:.1f}%\nConexiones activas: {my['threads']}  |  Consultas: {my['queries']}  |  Uptime: {my['uptime']}"
+            lbl_my_stats.configure(text=txt_my)
+
+            ftp = data["proftpd"]
+            txt_ftp = f"Procesos: {ftp['count']}  |  RAM: {ftp['rss_mb']:.1f} MB  |  CPU: {ftp['cpu_pct']:.1f}%"
+            lbl_ftp_stats.configure(text=txt_ftp)
+
+            lbl_total.configure(text=f"Memoria RAM total ocupada por XAMPP: {data['total_rss_mb']:.1f} MB")
+
+            if var_auto.get():
+                win.after(2000, update_metrics)
+
+        def on_close():
+            is_active_ref[0] = False
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
+        btn_bar = tk.Frame(win, bg=t["bg"])
+        btn_bar.pack(fill="x", padx=15, pady=(6, 12))
+
+        var_auto = tk.BooleanVar(value=True)
+        chk_auto = tk.Checkbutton(btn_bar, text="Actualizar en vivo (cada 2s)", variable=var_auto,
+                                  bg=t["bg"], fg=t["fg"], selectcolor=t["bg_secondary"],
+                                  command=lambda: update_metrics() if var_auto.get() else None)
+        chk_auto.pack(side="left")
+
+        tk.Button(btn_bar, text="🔄 Actualizar Ahora", bg=t["btn_start"], fg="white",
+                  font=("Helvetica", 8, "bold"), command=update_metrics).pack(side="right", padx=4)
+        tk.Button(btn_bar, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 8), command=on_close).pack(side="right", padx=4)
+
+        update_metrics()
+
+    SNAPSHOTS_DIR = os.path.expanduser("~/.local/share/xampp-gui/snapshots")
+
+    def _list_snapshots(self):
+        """Lista las instantáneas disponibles ordenadas por fecha reciente."""
+        if not os.path.isdir(self.SNAPSHOTS_DIR):
+            return []
+        snaps = []
+        try:
+            for entry in os.scandir(self.SNAPSHOTS_DIR):
+                if entry.is_dir():
+                    manifest_path = os.path.join(entry.path, "manifest.json")
+                    if os.path.isfile(manifest_path):
+                        try:
+                            with open(manifest_path, "r", encoding="utf-8") as f:
+                                meta = json.load(f)
+                            meta["path"] = entry.path
+                            snaps.append(meta)
+                        except Exception:
+                            pass
+        except Exception as e:
+            write_log(f"Error listando instantáneas: {e}")
+        snaps.sort(key=lambda s: s.get("created_at", ""), reverse=True)
+        return snaps
+
+    def create_snapshot(self, description="Punto de control"):
+        """Crea un snapshot completo de bases de datos y configuraciones."""
+        os.makedirs(self.SNAPSHOTS_DIR, exist_ok=True)
+        snap_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        target_dir = os.path.join(self.SNAPSHOTS_DIR, snap_id)
+        os.makedirs(target_dir, exist_ok=True)
+        cfg_dir = os.path.join(target_dir, "configs")
+        os.makedirs(cfg_dir, exist_ok=True)
+
+        dump_path = os.path.join(target_dir, "databases.sql")
+        dump_bin = self._get_mysql_bin("mysqldump")
+        has_db_dump = False
+
+        if self._port_open("127.0.0.1", 3306):
+            try:
+                cmd = [
+                    dump_bin, "-u", "root",
+                    "--all-databases",
+                    "--single-transaction",
+                    "--routines",
+                    "--triggers",
+                    "--default-character-set=utf8mb4"
+                ]
+                with open(dump_path, "w", encoding="utf-8") as out:
+                    res = subprocess.run(cmd, stdout=out, stderr=subprocess.PIPE, text=True, timeout=120)
+                if res.returncode == 0:
+                    has_db_dump = True
+            except Exception as e:
+                write_log(f"Error volcando bases de datos para snapshot: {e}")
+
+        key_configs = [
+            "/opt/lampp/etc/php.ini",
+            "/opt/lampp/etc/httpd.conf",
+            "/opt/lampp/etc/extra/httpd-vhosts.conf",
+            "/opt/lampp/etc/extra/httpd-ssl.conf",
+            "/opt/lampp/etc/my.cnf"
+        ]
+        backed_cfgs = []
+        for cfg in key_configs:
+            if os.path.isfile(cfg):
+                dst = os.path.join(cfg_dir, os.path.basename(cfg))
+                try:
+                    shutil.copy2(cfg, dst)
+                    backed_cfgs.append(os.path.basename(cfg))
+                except Exception:
+                    pass
+
+        total_bytes = 0
+        for root_d, _, files in os.walk(target_dir):
+            for fl in files:
+                total_bytes += os.path.getsize(os.path.join(root_d, fl))
+        size_mb = total_bytes / (1024.0 * 1024.0)
+
+        manifest = {
+            "id": snap_id,
+            "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "description": description,
+            "has_databases": has_db_dump,
+            "configs": backed_cfgs,
+            "size_mb": round(size_mb, 2)
+        }
+
+        with open(os.path.join(target_dir, "manifest.json"), "w", encoding="utf-8") as mf:
+            json.dump(manifest, mf, indent=2)
+
+        write_log(f"Snapshot '{snap_id}' creado con éxito ({size_mb:.2f} MB).")
+        return manifest
+
+    def restore_snapshot(self, snap_id):
+        """Restaura bases de datos y archivos de configuración desde un snapshot."""
+        target_dir = os.path.join(self.SNAPSHOTS_DIR, snap_id)
+        manifest_path = os.path.join(target_dir, "manifest.json")
+        if not os.path.isfile(manifest_path):
+            raise FileNotFoundError(f"No se encontró manifest en {target_dir}")
+
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        cfg_dir = os.path.join(target_dir, "configs")
+        cfg_map = {
+            "php.ini": "/opt/lampp/etc/php.ini",
+            "httpd.conf": "/opt/lampp/etc/httpd.conf",
+            "httpd-vhosts.conf": "/opt/lampp/etc/extra/httpd-vhosts.conf",
+            "httpd-ssl.conf": "/opt/lampp/etc/extra/httpd-ssl.conf",
+            "my.cnf": "/opt/lampp/etc/my.cnf"
+        }
+
+        for cfg_name, dst_path in cfg_map.items():
+            src_cfg = os.path.join(cfg_dir, cfg_name)
+            if os.path.isfile(src_cfg):
+                try:
+                    shutil.copy2(src_cfg, dst_path)
+                except PermissionError:
+                    subprocess.run(["pkexec", "cp", src_cfg, dst_path], check=True, timeout=10)
+
+        dump_path = os.path.join(target_dir, "databases.sql")
+        if meta.get("has_databases") and os.path.isfile(dump_path) and self._port_open("127.0.0.1", 3306):
+            mysql_bin = self._get_mysql_bin("mysql")
+            with open(dump_path, "r", encoding="utf-8", errors="replace") as in_f:
+                subprocess.run([mysql_bin, "-u", "root"], stdin=in_f, check=True, timeout=180)
+
+        write_log(f"Snapshot '{snap_id}' restaurado exitosamente.")
+        return True
+
+    def delete_snapshot(self, snap_id):
+        """Elimina una carpeta de snapshot."""
+        target_dir = os.path.join(self.SNAPSHOTS_DIR, snap_id)
+        if os.path.isdir(target_dir):
+            shutil.rmtree(target_dir)
+            write_log(f"Snapshot '{snap_id}' eliminado.")
+            return True
+        return False
+
+    def show_snapshots_manager(self):
+        """Muestra el administrador de puntos de restauración y snapshots."""
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Puntos de Restauración y Snapshots")
+        win.geometry("620x440")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        tk.Label(win, text="Puntos de Restauración (Instantáneas de XAMPP)", font=("Helvetica", 12, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(pady=(12, 6))
+
+        tree_frame = tk.Frame(win, bg=t["bg"])
+        tree_frame.pack(fill="both", expand=True, padx=12, pady=6)
+
+        cols = ("Fecha", "Descripción", "BD", "Tamaño")
+        tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=10)
+        tree.heading("Fecha", text="Fecha y Hora")
+        tree.heading("Descripción", text="Descripción / Motivo")
+        tree.heading("BD", text="Bases de Datos")
+        tree.heading("Tamaño", text="Tamaño")
+
+        tree.column("Fecha", width=140)
+        tree.column("Descripción", width=260)
+        tree.column("BD", width=90, anchor="center")
+        tree.column("Tamaño", width=80, anchor="center")
+
+        tree.pack(side="left", fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+
+        snapshots_cache = []
+
+        def refresh():
+            nonlocal snapshots_cache
+            for item in tree.get_children():
+                tree.delete(item)
+            snapshots_cache = self._list_snapshots()
+            for s in snapshots_cache:
+                bd_txt = "Sí (Todas)" if s.get("has_databases") else "No"
+                tree.insert("", "end", iid=s["id"], values=(
+                    s.get("created_at", ""),
+                    s.get("description", ""),
+                    bd_txt,
+                    f"{s.get('size_mb', 0)} MB"
+                ))
+
+        refresh()
+
+        btn_bar = tk.Frame(win, bg=t["bg"])
+        btn_bar.pack(fill="x", padx=12, pady=(6, 12))
+
+        def on_create():
+            from tkinter import simpledialog
+            desc = simpledialog.askstring("Nuevo Snapshot", "Motivo o descripción de la instantánea:",
+                                          initialvalue="Antes de actualizar", parent=win)
+            if desc:
+                self.show_progress()
+                def worker():
+                    try:
+                        self.create_snapshot(desc.strip())
+                        self.send_notification("Instantánea creada con éxito")
+                        self.safe_after(0, lambda: (refresh(), messagebox.showinfo("Éxito", "Instantánea guardada correctamente.")))
+                    except Exception as ex:
+                        write_log(f"Error creando snapshot: {ex}")
+                        self.safe_after(0, lambda: messagebox.showerror("Error", f"No se pudo crear snapshot:\n{ex}"))
+                    finally:
+                        self.safe_after(0, self.hide_progress)
+
+                threading.Thread(target=worker, daemon=True).start()
+
+        def on_restore():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Seleccionar", "Selecciona una instantánea para restaurar.")
+                return
+            snap_id = sel[0]
+            if messagebox.askyesno("Confirmar Restauración",
+                                   f"¿Estás seguro de restaurar el snapshot '{snap_id}'?\n\n"
+                                   "Esto reemplazará las bases de datos y archivos de configuración actuales."):
+                self.show_progress()
+                def worker():
+                    try:
+                        self.restore_snapshot(snap_id)
+                        self.send_notification("Snapshot restaurado")
+                        self.safe_after(0, lambda: messagebox.showinfo("Éxito", f"Snapshot '{snap_id}' restaurado correctamente."))
+                        if messagebox.askyesno("Reiniciar", "¿Deseas reiniciar los servicios ahora?"):
+                            self.run_service("restart", "all")
+                    except Exception as ex:
+                        write_log(f"Error restaurando snapshot: {ex}")
+                        self.safe_after(0, lambda: messagebox.showerror("Error", f"Fallo al restaurar:\n{ex}"))
+                    finally:
+                        self.safe_after(0, self.hide_progress)
+
+                threading.Thread(target=worker, daemon=True).start()
+
+        def on_delete():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Seleccionar", "Selecciona una instantánea para eliminar.")
+                return
+            snap_id = sel[0]
+            if messagebox.askyesno("Eliminar", f"¿Eliminar la instantánea '{snap_id}' definitivamente?"):
+                self.delete_snapshot(snap_id)
+                refresh()
+
+        tk.Button(btn_bar, text="➕ Crear Instantánea...", bg=t["btn_start"], fg="white",
+                  font=("Helvetica", 9, "bold"), command=on_create).pack(side="left", padx=3)
+        tk.Button(btn_bar, text="🔄 Restaurar Instantánea", bg=t["btn_restart"], fg="white",
+                  font=("Helvetica", 9, "bold"), command=on_restore).pack(side="left", padx=3)
+        tk.Button(btn_bar, text="🗑 Eliminar", bg=t["btn_stop"], fg="white",
+                  font=("Helvetica", 9), command=on_delete).pack(side="left", padx=3)
+        tk.Button(btn_bar, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=win.destroy).pack(side="right", padx=3)
+
+    def _scan_php_environments(self):
+        """Escanea todos los binarios PHP disponibles en el sistema Linux."""
+        candidates = ["/opt/lampp/bin/php", "/usr/bin/php"] + sorted(glob.glob("/usr/bin/php[5-9].[0-9]"))
+        seen = set()
+        environments = []
+
+        for p in candidates:
+            if os.path.isfile(p):
+                try:
+                    real = os.path.realpath(p)
+                    if real in seen:
+                        continue
+                    seen.add(real)
+
+                    res_v = subprocess.run([p, "-v"], capture_output=True, text=True, timeout=3)
+                    first_line = res_v.stdout.splitlines()[0] if res_v.stdout else "PHP Desconocido"
+                    m_v = re.search(r'PHP\s+([0-9]+\.[0-9]+\.[0-9]+)', first_line)
+                    version = m_v.group(1) if m_v else "N/D"
+
+                    res_m = subprocess.run([p, "-m"], capture_output=True, text=True, timeout=3)
+                    modules_count = len([m for m in res_m.stdout.splitlines() if m.strip()]) if res_m.returncode == 0 else 0
+
+                    is_xampp = "/opt/lampp" in real
+                    tag = "XAMPP LAMPP" if is_xampp else "Sistema Linux Mint"
+
+                    environments.append({
+                        "path": p,
+                        "real_path": real,
+                        "version": version,
+                        "title": first_line,
+                        "modules_count": modules_count,
+                        "tag": tag,
+                        "is_xampp": is_xampp
+                    })
+                except Exception as e:
+                    write_log(f"Error analizando binario PHP {p}: {e}")
+
+        return environments
+
+    def open_terminal_with_php(self, php_bin):
+        """Lanza un emulador de terminal con el entorno PATH preconfigurado para ese PHP."""
+        bin_dir = os.path.dirname(os.path.realpath(php_bin))
+        term_bin = self.find_terminal()
+        if not term_bin:
+            messagebox.showerror("Error", "No se detectó ningún emulador de terminal en el sistema.")
+            return
+
+        cmd_payload = (
+            f"export PATH=\"{bin_dir}:$PATH\"; "
+            f"echo -e '\\e[1;34m=========================================================\\e[0m'; "
+            f"echo -e '\\e[1;32m✔ Entorno PHP activado:\\e[0m $({php_bin} -v | head -n1)'; "
+            f"echo -e '\\e[1;36m✔ Binario activo:\\e[0m $(which php)'; "
+            f"echo -e '\\e[1;34m=========================================================\\e[0m'; "
+            f"exec bash"
+        )
+
+        try:
+            if any(t in term_bin for t in ("gnome-terminal", "mate-terminal", "xfce4-terminal", "tilix")):
+                subprocess.Popen([term_bin, "--", "bash", "-c", cmd_payload], cwd=HTDOCS_PATH)
+            elif "konsole" in term_bin:
+                subprocess.Popen([term_bin, "-e", "bash", "-c", cmd_payload], cwd=HTDOCS_PATH)
+            elif any(t in term_bin for t in ("alacritty", "kitty")):
+                subprocess.Popen([term_bin, "-e", "bash", "-c", cmd_payload], cwd=HTDOCS_PATH)
+            else:
+                subprocess.Popen([term_bin, "-e", f"bash -c '{cmd_payload}'"], cwd=HTDOCS_PATH)
+            self.send_notification(f"Terminal abierta con PHP {os.path.basename(php_bin)}")
+        except Exception as e:
+            write_log(f"Error lanzando terminal con PHP {php_bin}: {e}")
+            messagebox.showerror("Error", f"No se pudo abrir la terminal:\n{e}")
+
+    def show_php_environments_dialog(self):
+        """Muestra los entornos de PHP detectados en Linux Mint y permite lanzar terminales."""
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Entornos de PHP del Sistema (CLI)")
+        win.geometry("540x440")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        tk.Label(win, text="Versiones y Entornos de PHP Disponibles", font=("Helvetica", 12, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(pady=(12, 6))
+
+        frame = tk.Frame(win, bg=t["bg"], padx=15)
+        frame.pack(fill="both", expand=True)
+
+        envs = self._scan_php_environments()
+        if not envs:
+            tk.Label(frame, text="No se detectaron binarios de PHP.", bg=t["bg"], fg=t["fg"]).pack(pady=20)
+        else:
+            for env in envs:
+                card = tk.Frame(frame, bg=t["bg_secondary"], padx=10, pady=8, highlightbackground="#313244", highlightthickness=1)
+                card.pack(fill="x", pady=4)
+
+                badge_color = t["fg_active"] if env["is_xampp"] else t["fg_label"]
+                tk.Label(card, text=f"[{env['tag']}]", font=("Helvetica", 8, "bold"),
+                         bg=t["bg_secondary"], fg=badge_color).pack(anchor="w")
+
+                tk.Label(card, text=f"PHP v{env['version']} ({env['modules_count']} módulos cargados)",
+                         font=("Helvetica", 10, "bold"), bg=t["bg_secondary"], fg=t["fg"]).pack(anchor="w")
+
+                tk.Label(card, text=env["path"], font=("Monospace", 8),
+                         bg=t["bg_secondary"], fg="#888888").pack(anchor="w", pady=(0, 4))
+
+                tk.Button(card, text="💻 Abrir Terminal con este PHP", bg=t["bg_button"], fg=t["fg"],
+                          font=("Helvetica", 8, "bold"), command=lambda b=env["path"]: self.open_terminal_with_php(b)).pack(anchor="w")
+
+        tk.Button(win, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=win.destroy).pack(pady=8)
+
 
 LOG_MAX_BYTES = 1024 * 1024  # 1MB
 LOG_MAX_FILES = 5

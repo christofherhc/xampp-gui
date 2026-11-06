@@ -109,10 +109,28 @@ En distribuciones como Linux Mint y Ubuntu es muy común que servicios nativos d
 - **Módulos Frecuentes:** Monitorea extensiones críticas para el desarrollo web moderno: `curl`, `intl` (Symfony/Laravel), `mbstring`, `openssl`, `pdo_mysql`, `mysqli`, `zip` (Composer), `gd`, `fileinfo`, `bcmath`, `soap`.
 - **Activación Gráfica:** Si una extensión está inactiva, un botón **Activar** descomenta o inserta la directiva correspondiente en `/opt/lampp/etc/php.ini` de forma segura mediante elevación Polkit.
 
-### 🖥️ Integración Completa de Escritorio Linux Mint / Cinnamon
-- **Instalador y Desinstalador:** Scripts interactivos `install.sh` y `uninstall.sh` para registrar el acceso directo y el ícono en el sistema.
-- **Acceso Directo desde la GUI:** Opción en el menú **Herramientas ➔ Instalar acceso directo en el sistema...** para instalar el lanzador con un solo clic.
-- **Ícono Vectorial Moderno:** Incluye `xampp-control-center.svg` escalable para una apariencia nítida en paneles, menús y docks modernos.
+### 🔐 Generador de Certificados SSL Locales (HTTPS) y VirtualHosts Seguros
+Permite probar aplicaciones web en entornos seguros HTTPS locales (esencial para Progressive Web Apps, Service Workers, geolocalización, cookies seguras `SameSite=None`, WebSockets `wss://` y autenticación moderna):
+- **Generación Automática:** Genera pares de Clave Privada RSA (2048-bit) y Certificados X.509 autofirmados con SAN (*Subject Alternative Name*) para `localhost`, dominios locales (`*.test`) y `127.0.0.1` usando `openssl`.
+- **Integración con Apache:** Instala los archivos en `/opt/lampp/etc/ssl.crt/` y `/opt/lampp/etc/ssl.key/` y genera automáticamente el bloque `<VirtualHost *:443>` con `SSLEngine on`.
+- **Comando de Confianza para Linux Mint:** Proporciona el comando exacto para agregar el certificado a `/usr/local/share/ca-certificates/` y actualizar el almacén con `update-ca-certificates`, eliminando advertencias en Chrome/Firefox.
+
+### 📊 Monitor de Telemetría y Rendimiento en Tiempo Real (CPU, RAM y Conexiones)
+Panel visual integrado para supervisar el impacto en el sistema de los servicios de XAMPP:
+- **Consumo de Memoria RAM (RSS) y CPU%:** Calcula en tiempo real el consumo individual y total de Apache (`httpd`), MySQL (`mysqld`) y ProFTPD (`proftpd`) leyendo directamente los procesos de `/opt/lampp`.
+- **Métricas Avanzadas de Base de Datos:** Reporta en vivo las conexiones simultáneas activas (`Threads_connected`), tiempo de actividad (`Uptime`) y total de consultas procesadas (`Queries`).
+- **Actualización Reactiva:** Modo de actualización en vivo cada 2 segundos con parada limpia al cerrar el diálogo.
+
+### 💾 Gestor de Puntos de Restauración (Snapshots & 1-Clic Rollback)
+Sistema de protección contra pérdidas de datos y errores de configuración:
+- **Instantáneas Completas:** Exporta todas las bases de datos (`mysqldump --all-databases --single-transaction --routines`) y archiva los archivos de configuración (`php.ini`, `httpd.conf`, `httpd-vhosts.conf`, `httpd-ssl.conf`, `my.cnf`) en `~/.local/share/xampp-gui/snapshots/` con metadatos JSON.
+- **Rollback con 1 Clic:** Restaura instantáneamente el estado completo de las bases de datos y configuraciones ante experimentos fallidos o migraciones destructivas.
+- **Gestión Visual:** Tabla con fecha, descripción, tamaño y opción de eliminación para liberar almacenamiento.
+
+### 🐘 Selector de Entornos PHP Multi-Versión y Lanzador CLI
+- **Detección Automática:** Escanea todos los binarios PHP presentes en el sistema Linux Mint (`/opt/lampp/bin/php`, `/usr/bin/php`, `/usr/bin/php7.*`, `/usr/bin/php8.*`).
+- **Inspección de Módulos:** Muestra la versión exacta del compilador, motor Zend y cantidad de extensiones activas.
+- **Lanzador de Terminal Aislado:** Abre tu terminal favorita con `export PATH="<dir_php>:$PATH"`, permitiéndote ejecutar herramientas de línea de comandos (`composer`, `artisan`, `symfony`, `wp-cli`) con la versión específica de PHP que requiere cada proyecto.
 
 ### ⚙️ Accesos Directos a Configuración y Logs
 - Edición inmediata en un clic de los archivos principales de XAMPP:
