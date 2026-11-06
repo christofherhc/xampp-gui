@@ -8,6 +8,7 @@ import json
 import threading
 import socket
 import shutil
+import re
 from urllib.parse import quote
 
 # Lock para sincronización de escritura y rotación de logs
@@ -134,8 +135,6 @@ def _is_lampp_pid(pid, service_name=None):
             cmdline = f.read().decode("utf-8", errors="ignore")
         if "/opt/lampp" in cmdline:
             return True
-        if service_name and service_name in cmdline:
-            return True
     except Exception:
         pass
     return False
@@ -236,6 +235,57 @@ def _is_service_running(info):
     """Compatibilidad: Devuelve True solo si el servicio de XAMPP está activo."""
     status, _ = detect_service_status(info)
     return status == "● Activo"
+
+def detect_project_framework(project_path):
+    """Detecta la tecnología o framework principal de un proyecto en htdocs.
+    Devuelve una tupla: (nombre_framework, badge_str, color_hex)
+    """
+    if not project_path or not os.path.isdir(project_path):
+        return ("Desconocido", "", "#888888")
+
+    try:
+        entries = set(os.listdir(project_path))
+    except Exception:
+        return ("General", "📁 General", "#888888")
+
+    if not entries:
+        return ("Vacío", "📁 Vacío", "#888888")
+
+    # 1. Laravel (artisan CLI)
+    if "artisan" in entries:
+        return ("Laravel", "⚡ Laravel", "#e0564c")
+
+    # 2. WordPress (wp-config.php o carpetas/archivos wp-*)
+    if any(wp in entries for wp in ("wp-config.php", "wp-content", "wp-load.php", "wp-includes")):
+        return ("WordPress", "📰 WordPress", "#21759b")
+
+    # 3. Next.js / Node.js
+    if "package.json" in entries:
+        if any(f in entries for f in ("next.config.js", "next.config.mjs", "next.config.ts", ".next")):
+            return ("Next.js", "▲ Next.js", "#0070f3")
+        return ("Node.js", "📦 Node.js", "#68a063")
+
+    # 4. Django
+    if "manage.py" in entries:
+        return ("Django", "🐍 Django", "#0c4b33")
+
+    # 5. Python (Flask / FastAPI / scripts)
+    if any(py in entries for py in ("requirements.txt", "Pipfile", "pyproject.toml", "wsgi.py", "app.py")):
+        return ("Python", "🐍 Python", "#3776ab")
+
+    # 6. Composer
+    if "composer.json" in entries:
+        return ("Composer", "🐘 Composer", "#777bb4")
+
+    # 7. PHP tradicional
+    if "index.php" in entries or any(f.endswith(".php") for f in entries):
+        return ("PHP", "🐘 PHP", "#777bb4")
+
+    # 8. HTML/JS estático
+    if "index.html" in entries or any(f.endswith((".html", ".htm")) for f in entries):
+        return ("HTML", "🌐 HTML", "#e34f26")
+
+    return ("General", "📁 General", "#888888")
 
 class XamppGUI:
     def __init__(self):
@@ -438,7 +488,34 @@ class XamppGUI:
         
         config_menu.add_separator()
         config_menu.add_command(label="Abrir carpeta de logs", command=self.open_log_folder)
+        config_menu.add_separator()
+        config_menu.add_command(label="Administrador de Virtual Hosts...", command=self.show_vhosts_manager)
         
+        # Menú Base de Datos
+        db_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Base de Datos", menu=db_menu)
+        db_menu.add_command(label="Crear nueva Base de Datos...", command=self.create_database_dialog)
+        db_menu.add_command(label="Consola MySQL (Terminal)", command=self.open_mysql_console)
+        db_menu.add_separator()
+        db_menu.add_command(label="Exportar respaldo (.sql)...", command=self.export_database_dump)
+        db_menu.add_command(label="Importar respaldo (.sql)...", command=self.import_sql_file)
+        db_menu.add_separator()
+        db_menu.add_command(label="Abrir phpMyAdmin", command=self.open_phpmyadmin)
+
+        # Menú Herramientas
+        tools_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Herramientas", menu=tools_menu)
+        tools_menu.add_command(label="Diagnosticar conflicto de puertos...", command=self.show_conflict_resolver)
+        tools_menu.add_command(label="Extensiones de PHP activas...", command=self.show_php_extensions_dialog)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="Limpiar logs del servidor...", command=self.purge_server_logs)
+        tools_menu.add_command(label="Limpiar sesiones temporales...", command=self.clean_temp_sessions)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="Estado del disco y espacio...", command=self.check_disk_health)
+        tools_menu.add_command(label="Ajustes rápidos de PHP...", command=self.show_php_tweaks_dialog)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="Instalar acceso directo en el sistema...", command=self.install_desktop_shortcut)
+
         # Menú Ayuda
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Ayuda", menu=help_menu)
@@ -543,6 +620,7 @@ class XamppGUI:
         self.project_combo = ttk.Combobox(self.frame_projects, textvariable=self.project_var,
                                           state="readonly", width=18)
         self.project_combo.grid(row=0, column=1, columnspan=2, padx=2, pady=2, sticky="w")
+        self.project_combo.bind("<<ComboboxSelected>>", self.on_project_selected)
         
         self.btn_refresh_projects = tk.Button(self.frame_projects, text="🔄", width=3,
                                               font=("Helvetica", 9, "bold"),
@@ -553,6 +631,9 @@ class XamppGUI:
                                          font=("Helvetica", 9, "bold"),
                                          command=self.new_project)
         self.btn_new_project.grid(row=0, column=4, padx=2, pady=2)
+
+        self.lbl_framework = tk.Label(self.frame_projects, text="", font=("Helvetica", 8, "bold"))
+        self.lbl_framework.grid(row=0, column=5, padx=4, pady=2, sticky="w")
         
         self.btn_open_editor = tk.Button(self.frame_projects, text="✏ Editor",
                                           width=8, font=("Helvetica", 8, "bold"),
@@ -690,6 +771,8 @@ class XamppGUI:
                 
         if hasattr(self, "lbl_projects_sel"):
             self.lbl_projects_sel.configure(bg=t["bg"], fg=t["fg"])
+        if hasattr(self, "lbl_framework"):
+            self.lbl_framework.configure(bg=t["bg"])
         
         for cfg_btn in ("btn_phpini", "btn_httpd", "btn_myconf", "btn_errorlog", "btn_phperrorlog"):
             if hasattr(self, cfg_btn):
@@ -1341,11 +1424,12 @@ class XamppGUI:
     def show_about(self):
         installed = ", ".join(SERVICES.keys()) if SERVICES else "ninguno"
         messagebox.showinfo("Acerca de",
-                           "XAMPP Control Center v2.2\n\n"
-                           "Interfaz gráfica para administrar XAMPP en Linux (Mint, Ubuntu, Debian).\n\n"
+                           "XAMPP Control Center v2.4\n\n"
+                           "Suite gráfica avanzada para administrar XAMPP en Linux (Mint, Ubuntu, Debian).\n\n"
                            f"Servicios detectados: {installed}\n"
-                           "Características: Detección anti-colisión, auto-refresh,\n"
-                           "gestor de proyectos, logs integrados, temas claro/oscuro.")
+                           "Características: Detección anti-colisión, herramientas MySQL,\n"
+                           "administrador de Virtual Hosts (VHosts), asistente de conflictos,\n"
+                           "detector de frameworks (Laravel/WP) e inspector de extensiones PHP.")
 
     def _port_open(self, host, port, timeout=1.0):
         """Comprueba si un puerto responde en localhost."""
@@ -1354,6 +1438,18 @@ class XamppGUI:
                 return True
         except Exception:
             return False
+
+    def on_project_selected(self, event=None):
+        """Actualiza la insignia de tecnología del proyecto seleccionado."""
+        name = self.project_var.get().strip() if hasattr(self, "project_var") else ""
+        if not name:
+            if hasattr(self, "lbl_framework"):
+                self.lbl_framework.configure(text="")
+            return
+        path = os.path.join(HTDOCS_PATH, name)
+        _, badge, color = detect_project_framework(path)
+        if hasattr(self, "lbl_framework"):
+            self.lbl_framework.configure(text=badge, fg=color)
 
     def load_projects(self):
         """Lista las carpetas (proyectos) del directorio htdocs en el Combobox."""
@@ -1377,6 +1473,7 @@ class XamppGUI:
                 self.project_var.set(projects[0])
         else:
             self.project_var.set("")
+        self.on_project_selected()
 
     def new_project(self):
         """Crea una nueva carpeta de proyecto dentro de htdocs."""
@@ -1400,6 +1497,7 @@ class XamppGUI:
             write_log(f"Nuevo proyecto creado: {target_path}")
             self.load_projects()
             self.project_var.set(name)
+            self.on_project_selected()
             self.send_notification(f"Proyecto '{name}' creado con éxito")
         except PermissionError:
             write_log(f"Permiso denegado al crear proyecto en {target_path}")
@@ -1477,9 +1575,13 @@ class XamppGUI:
                                    "El puerto 80 no responde.\n"
                                    "Inicia Apache antes de abrir el proyecto.")
             return
+        framework, _, _ = detect_project_framework(path)
         name = os.path.basename(path)
-        url = f"http://localhost/{quote(name)}"
-        write_log(f"Abriendo proyecto en navegador: {url}")
+        if framework == "Laravel" and os.path.isdir(os.path.join(path, "public")):
+            url = f"http://localhost/{quote(name)}/public"
+        else:
+            url = f"http://localhost/{quote(name)}"
+        write_log(f"Abriendo proyecto en navegador: {url} (framework: {framework})")
         webbrowser.open(url)
 
     def open_localhost(self):
@@ -1545,6 +1647,1178 @@ class XamppGUI:
         except Exception as e:
             write_log(f"Error abriendo panel oficial: {e}")
             messagebox.showerror("Error", f"No se pudo abrir el panel oficial:\n{e}")
+
+    # =========================================================================
+    # Herramientas de Base de Datos (MySQL)
+    # =========================================================================
+
+    def _get_mysql_bin(self, binary="mysql"):
+        """Retorna la ruta al binario de MySQL o mysqldump de XAMPP o del sistema."""
+        xampp_bin = f"/opt/lampp/bin/{binary}"
+        if os.path.isfile(xampp_bin) and os.access(xampp_bin, os.X_OK):
+            return xampp_bin
+        return shutil.which(binary) or xampp_bin
+
+    def _list_mysql_databases(self):
+        """Retorna lista de bases de datos de usuario en MySQL."""
+        mysql_bin = self._get_mysql_bin("mysql")
+        try:
+            res = subprocess.run(
+                [mysql_bin, "-u", "root", "-B", "-N", "-e", "SHOW DATABASES;"],
+                capture_output=True, text=True, timeout=5
+            )
+            if res.returncode == 0:
+                sys_dbs = {"information_schema", "performance_schema", "mysql", "sys"}
+                dbs = [db.strip() for db in res.stdout.splitlines() if db.strip() and db.strip() not in sys_dbs]
+                return dbs
+        except Exception as e:
+            write_log(f"Error listando bases de datos: {e}")
+        return []
+
+    def create_database_dialog(self):
+        """Diálogo interactivo para crear una base de datos en MySQL."""
+        if not self._port_open("127.0.0.1", 3306):
+            messagebox.showwarning(
+                "MySQL inactivo",
+                "El servicio MySQL no está corriendo (puerto 3306 inactivo).\n"
+                "Inicia MySQL antes de crear una base de datos."
+            )
+            return
+
+        from tkinter import simpledialog
+        db_name = simpledialog.askstring(
+            "Crear Base de Datos",
+            "Introduce el nombre de la nueva base de datos:",
+            parent=self.root
+        )
+        if not db_name:
+            return
+        db_name = db_name.strip()
+        
+        # Validación de seguridad: identificador SQL alfanumérico y guiones bajos
+        if not re.match(r'^[a-zA-Z0-9_]+$', db_name):
+            messagebox.showerror(
+                "Nombre inválido",
+                "El nombre de la base de datos solo puede contener letras, números y guiones bajos (_)."
+            )
+            return
+
+        mysql_bin = self._get_mysql_bin("mysql")
+        sql = f"CREATE DATABASE `{db_name}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+        try:
+            res = subprocess.run(
+                [mysql_bin, "-u", "root", "-e", sql],
+                capture_output=True, text=True, timeout=10
+            )
+            if res.returncode == 0:
+                write_log(f"Base de datos '{db_name}' creada exitosamente.")
+                self.send_notification(f"Base de datos '{db_name}' creada.")
+                messagebox.showinfo("Éxito", f"Base de datos '{db_name}' creada exitosamente en MySQL.")
+            else:
+                err = res.stderr.strip() or res.stdout.strip()
+                write_log(f"Error al crear base de datos '{db_name}': {err}")
+                if "database exists" in err.lower():
+                    err_msg = f"La base de datos '{db_name}' ya existe en MySQL."
+                elif "access denied" in err.lower():
+                    err_msg = "Acceso denegado: el usuario root tiene contraseña o permisos restringidos."
+                else:
+                    err_msg = f"No se pudo crear la base de datos:\n{err}"
+                messagebox.showerror("Error MySQL", err_msg)
+        except Exception as e:
+            write_log(f"Excepción al crear BD: {e}")
+            messagebox.showerror("Error", f"Error ejecutando MySQL:\n{e}")
+
+    def open_mysql_console(self):
+        """Abre una consola interactiva de MySQL en el terminal del usuario."""
+        if not self._port_open("127.0.0.1", 3306):
+            messagebox.showwarning(
+                "MySQL inactivo",
+                "El servicio MySQL no está corriendo (puerto 3306 inactivo).\n"
+                "Inicia MySQL antes de abrir la consola."
+            )
+            return
+
+        terminal = self.find_terminal()
+        if not terminal:
+            messagebox.showwarning("Sin terminal", "No se encontró un emulador de terminal compatible.")
+            return
+
+        mysql_bin = self._get_mysql_bin("mysql")
+        shell_cmd = f"echo '=== Consola MySQL XAMPP (root) ==='; '{mysql_bin}' -u root; exec bash"
+        
+        cmd = [terminal]
+        if terminal in ("gnome-terminal", "mate-terminal", "xfce4-terminal", "tilix", "terminator"):
+            cmd.extend(["--", "bash", "-c", shell_cmd])
+        elif "konsole" in terminal or "alacritty" in terminal or "xterm" in terminal:
+            cmd.extend(["-e", "bash", "-c", shell_cmd])
+        elif "kitty" in terminal:
+            cmd.extend(["bash", "-c", shell_cmd])
+        else:
+            cmd.extend(["-e", "bash", "-c", shell_cmd])
+
+        try:
+            write_log(f"Abriendo consola MySQL en {terminal}")
+            subprocess.Popen(cmd)
+        except Exception as e:
+            write_log(f"Error abriendo consola MySQL: {e}")
+            messagebox.showerror("Error", f"No se pudo abrir el terminal:\n{e}")
+
+    def export_database_dump(self):
+        """Exporta un respaldo (.sql) de una base de datos mediante mysqldump."""
+        if not self._port_open("127.0.0.1", 3306):
+            messagebox.showwarning("MySQL inactivo", "Inicia MySQL antes de exportar un respaldo.")
+            return
+
+        from tkinter import simpledialog, filedialog
+        databases = self._list_mysql_databases()
+        if databases:
+            db_dialog = tk.Toplevel(self.root)
+            db_dialog.title("Exportar Base de Datos")
+            db_dialog.geometry("340x160")
+            db_dialog.resizable(False, False)
+            db_dialog.transient(self.root)
+            db_dialog.grab_set()
+            
+            t = THEMES[self.current_theme]
+            db_dialog.configure(bg=t["bg"])
+            
+            tk.Label(db_dialog, text="Selecciona la base de datos a exportar:",
+                     bg=t["bg"], fg=t["fg"], font=("Helvetica", 9, "bold")).pack(pady=(15, 5))
+            
+            combo_var = tk.StringVar(value=databases[0])
+            combo = ttk.Combobox(db_dialog, textvariable=combo_var, values=databases, state="readonly", width=25)
+            combo.pack(pady=5)
+            
+            selected_db = [None]
+            def on_confirm():
+                selected_db[0] = combo_var.get().strip()
+                db_dialog.destroy()
+                
+            tk.Button(db_dialog, text="Continuar", bg=t["btn_start"], fg="white",
+                      font=("Helvetica", 9, "bold"), command=on_confirm).pack(pady=10)
+            
+            self.root.wait_window(db_dialog)
+            target_db = selected_db[0]
+        else:
+            target_db = simpledialog.askstring("Exportar Base de Datos", "Nombre de la base de datos:", parent=self.root)
+            
+        if not target_db:
+            return
+            
+        default_file = f"{target_db}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.sql"
+        save_path = filedialog.asksaveasfilename(
+            title=f"Guardar respaldo de '{target_db}'",
+            initialfile=default_file,
+            defaultextension=".sql",
+            filetypes=[("Archivos SQL", "*.sql"), ("Todos los archivos", "*.*")]
+        )
+        if not save_path:
+            return
+
+        self.show_progress()
+        self.send_notification(f"Exportando base de datos '{target_db}'...")
+        write_log(f"Iniciando exportación de '{target_db}' a {save_path}")
+
+        def run_export():
+            dump_bin = self._get_mysql_bin("mysqldump")
+            try:
+                dump_cmd = [
+                    dump_bin, "-u", "root",
+                    "--single-transaction",
+                    "--routines",
+                    "--triggers",
+                    "--default-character-set=utf8mb4",
+                    target_db
+                ]
+                with open(save_path, "w", encoding="utf-8") as out_f:
+                    res = subprocess.run(
+                        dump_cmd,
+                        stdout=out_f, stderr=subprocess.PIPE, text=True, timeout=120
+                    )
+                if res.returncode == 0:
+                    size_kb = os.path.getsize(save_path) / 1024
+                    write_log(f"Respaldo completado: {save_path} ({size_kb:.1f} KB)")
+                    self.safe_after(0, lambda: messagebox.showinfo(
+                        "Exportación Exitosa",
+                        f"Respaldo de '{target_db}' guardado correctamente.\n\n"
+                        f"Archivo: {os.path.basename(save_path)}\nTamaño: {size_kb:.1f} KB"
+                    ))
+                    self.safe_after(0, lambda: self.send_notification(f"Exportación de '{target_db}' completada"))
+                else:
+                    err = res.stderr.strip()
+                    write_log(f"Error en mysqldump: {err}")
+                    if "access denied" in err.lower():
+                        err_user = "Acceso denegado: root requiere contraseña o tiene permisos restringidos."
+                    else:
+                        err_user = f"mysqldump falló:\n{err}"
+                    self.safe_after(0, lambda: messagebox.showerror("Error de Exportación", err_user))
+            except Exception as e:
+                write_log(f"Excepción en exportación: {e}")
+                self.safe_after(0, lambda: messagebox.showerror("Error", f"Error al exportar:\n{e}"))
+            finally:
+                self.safe_after(0, self.hide_progress)
+
+        threading.Thread(target=run_export, daemon=True).start()
+
+    def import_sql_file(self):
+        """Importa un archivo SQL (.sql) a una base de datos MySQL."""
+        if not self._port_open("127.0.0.1", 3306):
+            messagebox.showwarning("MySQL inactivo", "Inicia MySQL antes de importar un archivo SQL.")
+            return
+
+        from tkinter import filedialog, simpledialog
+        sql_file = filedialog.askopenfilename(
+            title="Seleccionar archivo SQL para importar",
+            filetypes=[("Archivos SQL", "*.sql"), ("Todos los archivos", "*.*")]
+        )
+        if not sql_file or not os.path.isfile(sql_file):
+            return
+
+        databases = self._list_mysql_databases()
+        suggested_name = os.path.splitext(os.path.basename(sql_file))[0].split("_")[0]
+        suggested_name = re.sub(r'[^a-zA-Z0-9_]', '', suggested_name)
+
+        target_db = simpledialog.askstring(
+            "Base de datos de destino",
+            f"Bases de datos existentes: {', '.join(databases) if databases else 'ninguna'}\n\n"
+            "Introduce el nombre de la base de datos donde importar:",
+            initialvalue=suggested_name if suggested_name else "mi_base",
+            parent=self.root
+        )
+        if not target_db:
+            return
+        target_db = target_db.strip()
+        if not re.match(r'^[a-zA-Z0-9_]+$', target_db):
+            messagebox.showerror("Nombre inválido", "El nombre de la base de datos contiene caracteres no válidos.")
+            return
+
+        mysql_bin = self._get_mysql_bin("mysql")
+
+        if databases and target_db not in databases:
+            if messagebox.askyesno("Crear Base de Datos", f"La base de datos '{target_db}' no existe.\n¿Deseas crearla ahora?"):
+                res_create = subprocess.run(
+                    [mysql_bin, "-u", "root", "-e", f"CREATE DATABASE `{target_db}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"],
+                    capture_output=True, text=True
+                )
+                if res_create.returncode != 0:
+                    messagebox.showerror("Error", f"No se pudo crear la base de datos:\n{res_create.stderr.strip()}")
+                    return
+            else:
+                return
+
+        self.show_progress()
+        self.send_notification(f"Importando SQL en '{target_db}'...")
+        write_log(f"Importando {sql_file} en base de datos '{target_db}'")
+
+        def run_import():
+            try:
+                import_cmd = [mysql_bin, "-u", "root", "--default-character-set=utf8mb4", target_db]
+                with open(sql_file, "r", encoding="utf-8", errors="replace") as in_f:
+                    res = subprocess.run(
+                        import_cmd,
+                        stdin=in_f, capture_output=True, text=True, timeout=300
+                    )
+                if res.returncode == 0:
+                    write_log(f"Importación completada con éxito en '{target_db}'")
+                    self.safe_after(0, lambda: messagebox.showinfo(
+                        "Importación Exitosa",
+                        f"El archivo '{os.path.basename(sql_file)}' se importó correctamente en '{target_db}'."
+                    ))
+                    self.safe_after(0, lambda: self.send_notification(f"Importación en '{target_db}' completada"))
+                else:
+                    err = res.stderr.strip()
+                    write_log(f"Error importando SQL: {err}")
+                    self.safe_after(0, lambda: messagebox.showerror("Error de Importación", f"MySQL devolvió un error:\n{err}"))
+            except Exception as e:
+                write_log(f"Excepción en importación SQL: {e}")
+                self.safe_after(0, lambda: messagebox.showerror("Error", f"Error al importar archivo SQL:\n{e}"))
+            finally:
+                self.safe_after(0, self.hide_progress)
+
+        threading.Thread(target=run_import, daemon=True).start()
+
+    # =========================================================================
+    # Herramientas de Mantenimiento y Janitor
+    # =========================================================================
+
+    def purge_server_logs(self):
+        """Purga y vacía los logs del servidor XAMPP para liberar espacio."""
+        log_files = [
+            "/opt/lampp/logs/access_log",
+            "/opt/lampp/logs/error_log",
+            "/opt/lampp/logs/php_error_log",
+            "/opt/lampp/logs/ssl_request_log",
+            "/opt/lampp/var/mysql/mysql.log",
+        ]
+        
+        found = []
+        total_bytes = 0
+        for path in log_files:
+            if os.path.isfile(path):
+                sz = os.path.getsize(path)
+                total_bytes += sz
+                found.append((path, sz))
+                
+        if not found or total_bytes == 0:
+            messagebox.showinfo("Logs limpios", "Los logs del servidor ya están limpios o vacíos (0 KB).")
+            return
+            
+        mb = total_bytes / (1024 * 1024)
+        msg = f"Se encontraron {len(found)} archivos de registro ({mb:.2f} MB en total):\n\n"
+        for path, sz in found:
+            msg += f"• {os.path.basename(path)}: {sz / 1024:.1f} KB\n"
+        msg += "\n¿Deseas vaciar estos archivos para liberar espacio en disco?"
+        
+        if not messagebox.askyesno("Confirmar purga de logs", msg):
+            return
+            
+        try:
+            cleared_with_perm = True
+            for path, _ in found:
+                try:
+                    with open(path, "w") as f:
+                        f.truncate(0)
+                except PermissionError:
+                    cleared_with_perm = False
+                    break
+                    
+            if not cleared_with_perm:
+                target_str = " ".join(f"'{p}'" for p, _ in found)
+                cmd = ["pkexec", "bash", "-c", f"for f in {target_str}; do : > \"$f\"; done"]
+                subprocess.run(cmd, check=True, timeout=15)
+                
+            write_log(f"Logs de servidor purgados ({mb:.2f} MB liberados)")
+            self.send_notification(f"Logs purgados: {mb:.2f} MB liberados")
+            messagebox.showinfo("Purga completada", f"Se han vaciado los archivos de registro.\nEspacio liberado: {mb:.2f} MB.")
+        except Exception as e:
+            write_log(f"Error purgando logs: {e}")
+            messagebox.showerror("Error", f"No se pudieron vaciar los logs:\n{e}")
+
+    def clean_temp_sessions(self):
+        """Limpia los archivos de sesiones temporales acumulados en /opt/lampp/temp."""
+        temp_dir = "/opt/lampp/temp"
+        if not os.path.isdir(temp_dir):
+            messagebox.showinfo("Directorio temporal", "No se encontró el directorio /opt/lampp/temp.")
+            return
+
+        session_files = []
+        total_bytes = 0
+        try:
+            for entry in os.scandir(temp_dir):
+                if entry.is_file() and (entry.name.startswith("sess_") or entry.name.endswith(".tmp")):
+                    try:
+                        sz = entry.stat().st_size
+                        total_bytes += sz
+                        session_files.append(entry.path)
+                    except Exception:
+                        pass
+        except Exception as e:
+            write_log(f"Error escaneando temp: {e}")
+
+        if not session_files:
+            messagebox.showinfo("Sesiones temporales", "No hay archivos de sesiones temporales acumulados.")
+            return
+
+        kb = total_bytes / 1024
+        if not messagebox.askyesno(
+            "Limpiar temporales",
+            f"Se encontraron {len(session_files)} archivos temporales de sesión ({kb:.1f} KB).\n\n"
+            "¿Deseas eliminarlos para mantener limpio el entorno?"
+        ):
+            return
+
+        deleted = 0
+        direct_ok = True
+        for path in session_files:
+            try:
+                os.remove(path)
+                deleted += 1
+            except PermissionError:
+                direct_ok = False
+                break
+            except Exception:
+                pass
+
+        if not direct_ok:
+            try:
+                cmd = ["pkexec", "bash", "-c", f"rm -f {temp_dir}/sess_* {temp_dir}/*.tmp"]
+                subprocess.run(cmd, check=True, timeout=15)
+                deleted = len(session_files)
+            except Exception as e:
+                write_log(f"Error eliminando temporales vía pkexec: {e}")
+                messagebox.showerror("Error", f"No se pudieron eliminar todos los temporales:\n{e}")
+                return
+
+        write_log(f"Archivos temporales eliminados: {deleted} ({kb:.1f} KB)")
+        self.send_notification(f"{deleted} archivos temporales eliminados")
+        messagebox.showinfo("Limpieza completada", f"Se eliminaron {deleted} archivos de sesión ({kb:.1f} KB liberados).")
+
+    def check_disk_health(self):
+        """Muestra el estado del disco, espacio libre y permisos del directorio de proyectos."""
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Estado del Disco y Entorno")
+        win.geometry("450x380")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        check_path = "/opt/lampp" if os.path.exists("/opt/lampp") else "/"
+        try:
+            usage = shutil.disk_usage(check_path)
+            total_gb = usage.total / (1024**3)
+            used_gb = usage.used / (1024**3)
+            free_gb = usage.free / (1024**3)
+            pct = (usage.used / usage.total) * 100
+        except Exception:
+            total_gb = used_gb = free_gb = pct = 0
+
+        htdocs_writable = os.access(HTDOCS_PATH, os.W_OK) if os.path.exists(HTDOCS_PATH) else False
+
+        tk.Label(win, text="Diagnóstico del Entorno XAMPP", font=("Helvetica", 12, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(pady=(15, 10))
+
+        frame = tk.Frame(win, bg=t["bg_secondary"], padx=15, pady=12)
+        frame.pack(fill="both", expand=True, padx=15, pady=5)
+
+        tk.Label(frame, text=f"Almacenamiento ({check_path}):", font=("Helvetica", 9, "bold"),
+                 bg=t["bg_secondary"], fg=t["fg"]).pack(anchor="w", pady=(0, 4))
+        
+        info_disk = f"• Total: {total_gb:.1f} GB\n• Usado: {used_gb:.1f} GB ({pct:.1f}%)\n• Libre: {free_gb:.1f} GB"
+        tk.Label(frame, text=info_disk, justify="left", font=("Monospace", 9),
+                 bg=t["bg_secondary"], fg=t["fg"]).pack(anchor="w", padx=10, pady=(0, 6))
+
+        pbar = ttk.Progressbar(frame, value=pct, maximum=100)
+        pbar.pack(fill="x", padx=10, pady=(0, 15))
+
+        tk.Label(frame, text="Permisos de htdocs:", font=("Helvetica", 9, "bold"),
+                 bg=t["bg_secondary"], fg=t["fg"]).pack(anchor="w", pady=(0, 4))
+
+        if htdocs_writable:
+            perm_text = "✅ Tu usuario tiene permisos directos de escritura en htdocs.\n(Puedes crear proyectos sin usar sudo)."
+            perm_color = t["fg_active"]
+        else:
+            perm_text = "⚠️ Tu usuario no tiene permisos de escritura en htdocs.\nPara solucionar esto, ejecuta en tu terminal:\nsudo chown -R $USER:$USER /opt/lampp/htdocs"
+            perm_color = t.get("fg_conflict", "#f39c12")
+
+        tk.Label(frame, text=perm_text, justify="left", font=("Helvetica", 8),
+                 bg=t["bg_secondary"], fg=perm_color).pack(anchor="w", padx=10, pady=(0, 10))
+
+        tk.Button(win, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9, "bold"), command=win.destroy).pack(pady=10)
+
+    def show_php_tweaks_dialog(self):
+        """Muestra ventana modal para ajustar parámetros comunes de php.ini."""
+        php_ini_path = "/opt/lampp/etc/php.ini"
+        if not os.path.isfile(php_ini_path):
+            messagebox.showerror("php.ini no encontrado", f"No se encontró el archivo:\n{php_ini_path}")
+            return
+
+        try:
+            with open(php_ini_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as e:
+            messagebox.showerror("Error de lectura", f"No se pudo leer php.ini:\n{e}")
+            return
+
+        directives = {
+            "upload_max_filesize": r"^\s*upload_max_filesize\s*=\s*([^\s;]+)",
+            "post_max_size": r"^\s*post_max_size\s*=\s*([^\s;]+)",
+            "memory_limit": r"^\s*memory_limit\s*=\s*([^\s;]+)",
+            "max_execution_time": r"^\s*max_execution_time\s*=\s*([^\s;]+)",
+        }
+
+        current_values = {}
+        for key, pattern in directives.items():
+            m = re.search(pattern, content, flags=re.MULTILINE)
+            current_values[key] = m.group(1) if m else ""
+
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Ajustes Rápidos de PHP (php.ini)")
+        win.geometry("380x310")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+        win.configure(bg=t["bg"])
+
+        tk.Label(win, text="Parámetros Rápidos de PHP", font=("Helvetica", 11, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(pady=(12, 8))
+
+        form_frame = tk.Frame(win, bg=t["bg"], padx=15)
+        form_frame.pack(fill="both", expand=True)
+
+        entries = {}
+        labels_desc = {
+            "upload_max_filesize": "Subida máx. archivo (ej: 64M):",
+            "post_max_size": "POST máx. tamaño (ej: 64M):",
+            "memory_limit": "Límite de memoria (ej: 256M):",
+            "max_execution_time": "Tiempo ejec. segs (ej: 300):",
+        }
+
+        for idx, (key, desc) in enumerate(labels_desc.items()):
+            tk.Label(form_frame, text=desc, font=("Helvetica", 9), anchor="w",
+                     bg=t["bg"], fg=t["fg"]).grid(row=idx, column=0, sticky="w", pady=4)
+            ent = tk.Entry(form_frame, width=12, font=("Monospace", 9))
+            ent.insert(0, current_values.get(key, ""))
+            ent.grid(row=idx, column=1, sticky="e", pady=4, padx=(10, 0))
+            entries[key] = ent
+
+        def save_changes():
+            new_content = content
+            for key, ent in entries.items():
+                val = ent.get().strip()
+                if not val:
+                    continue
+                if not re.match(r'^[0-9]+[KMGkmg]?$', val):
+                    messagebox.showerror("Valor inválido", f"Valor no válido para {key}: '{val}'")
+                    return
+                val = val.upper()
+                pattern = rf"(^\s*{key}\s*=\s*)([^\s;]+)"
+                if re.search(pattern, new_content, flags=re.MULTILINE):
+                    new_content = re.sub(pattern, rf"\g<1>{val}", new_content, flags=re.MULTILINE)
+                else:
+                    new_content += f"\n{key} = {val}\n"
+
+            try:
+                written = False
+                try:
+                    with open(php_ini_path + ".bak", "w", encoding="utf-8") as bkp:
+                        bkp.write(content)
+                    with open(php_ini_path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+                    written = True
+                except PermissionError:
+                    written = False
+
+                if not written:
+                    tmp_file = "/tmp/php_ini_tweaked.tmp"
+                    with open(tmp_file, "w", encoding="utf-8") as tmp:
+                        tmp.write(new_content)
+                    subprocess.run(["pkexec", "cp", tmp_file, php_ini_path], check=True, timeout=15)
+                    try:
+                        os.remove(tmp_file)
+                    except Exception:
+                        pass
+
+                write_log("Valores de php.ini actualizados correctamente")
+                self.send_notification("php.ini actualizado")
+                messagebox.showinfo(
+                    "Cambios guardados",
+                    "Los ajustes de php.ini se han guardado exitosamente.\n\n"
+                    "Reinicia el servicio Apache para que los cambios surtan efecto."
+                )
+                win.destroy()
+            except Exception as e:
+                write_log(f"Error guardando php.ini: {e}")
+                messagebox.showerror("Error", f"No se pudo guardar php.ini:\n{e}")
+
+        btn_box = tk.Frame(win, bg=t["bg"])
+        btn_box.pack(pady=12)
+
+        tk.Button(btn_box, text="💾 Guardar Cambios", bg=t["btn_start"], fg="white",
+                  font=("Helvetica", 9, "bold"), command=save_changes).pack(side="left", padx=5)
+        tk.Button(btn_box, text="Cancelar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=win.destroy).pack(side="left", padx=5)
+
+    # =========================================================================
+    # Administrador de Virtual Hosts (VHosts)
+    # =========================================================================
+
+    def _is_vhosts_enabled(self):
+        """Comprueba si Include etc/extra/httpd-vhosts.conf está activo en httpd.conf."""
+        httpd_conf = "/opt/lampp/etc/httpd.conf"
+        if not os.path.isfile(httpd_conf):
+            return False
+        try:
+            with open(httpd_conf, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            return bool(re.search(r'^\s*Include\s+etc/extra/httpd-vhosts\.conf', content, re.MULTILINE))
+        except Exception:
+            return False
+
+    def _enable_vhosts_in_httpd_conf(self):
+        """Habilita la directiva Include etc/extra/httpd-vhosts.conf en httpd.conf."""
+        httpd_conf = "/opt/lampp/etc/httpd.conf"
+        if not os.path.isfile(httpd_conf):
+            messagebox.showerror("Error", f"No se encontró {httpd_conf}")
+            return False
+
+        try:
+            with open(httpd_conf, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+
+            pattern = r'^\s*#\s*(Include\s+etc/extra/httpd-vhosts\.conf)'
+            if re.search(pattern, content, re.MULTILINE):
+                new_content = re.sub(pattern, r'\g<1>', content, flags=re.MULTILINE)
+            elif "Include etc/extra/httpd-vhosts.conf" in content:
+                return True
+            else:
+                new_content = content + "\n# Virtual hosts\nInclude etc/extra/httpd-vhosts.conf\n"
+
+            try:
+                with open(httpd_conf + ".bak", "w", encoding="utf-8") as bkp:
+                    bkp.write(content)
+                with open(httpd_conf, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+            except PermissionError:
+                tmp = "/tmp/httpd_vhosts_enable.tmp"
+                with open(tmp, "w", encoding="utf-8") as t:
+                    t.write(new_content)
+                subprocess.run(["pkexec", "cp", tmp, httpd_conf], check=True, timeout=15)
+                try:
+                    os.remove(tmp)
+                except Exception:
+                    pass
+
+            write_log("Virtual hosts habilitado en httpd.conf")
+            return True
+        except Exception as e:
+            write_log(f"Error habilitando vhosts en httpd.conf: {e}")
+            messagebox.showerror("Error", f"No se pudo modificar httpd.conf:\n{e}")
+            return False
+
+    def _parse_vhosts_file(self):
+        """Lee y analiza las directivas de VirtualHost definidas en httpd-vhosts.conf."""
+        vhosts_conf = "/opt/lampp/etc/extra/httpd-vhosts.conf"
+        if not os.path.isfile(vhosts_conf):
+            return []
+
+        try:
+            with open(vhosts_conf, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as e:
+            write_log(f"Error leyendo {vhosts_conf}: {e}")
+            return []
+
+        vhosts = []
+        pattern = r'<VirtualHost\s+([^>]+)>(.*?)</VirtualHost>'
+        for match in re.finditer(pattern, content, re.DOTALL | re.IGNORECASE):
+            port_info = match.group(1).strip()
+            block = match.group(2)
+            
+            m_name = re.search(r'^\s*ServerName\s+([^\s#]+)', block, re.MULTILINE | re.IGNORECASE)
+            m_doc = re.search(r'^\s*DocumentRoot\s+["\']?([^"\'#\s]+)', block, re.MULTILINE | re.IGNORECASE)
+            m_alias = re.search(r'^\s*ServerAlias\s+([^\s#]+)', block, re.MULTILINE | re.IGNORECASE)
+            
+            if m_name and m_doc:
+                vhosts.append({
+                    "port": port_info,
+                    "server_name": m_name.group(1),
+                    "doc_root": m_doc.group(1),
+                    "alias": m_alias.group(1) if m_alias else "",
+                    "raw": match.group(0)
+                })
+        return vhosts
+
+    def show_vhosts_manager(self):
+        """Muestra el administrador de Virtual Hosts."""
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Administrador de Virtual Hosts (VHosts)")
+        win.geometry("640x480")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        is_enabled = self._is_vhosts_enabled()
+        status_frame = tk.Frame(win, bg=t["bg_secondary"], padx=10, pady=8)
+        status_frame.pack(fill="x", padx=12, pady=(12, 6))
+
+        lbl_status = tk.Label(status_frame, 
+                              text="✅ Soporte de Virtual Hosts activo en httpd.conf" if is_enabled else "⚠️ Virtual Hosts deshabilitado en httpd.conf",
+                              font=("Helvetica", 9, "bold"),
+                              bg=t["bg_secondary"], 
+                              fg=t["fg_active"] if is_enabled else t.get("fg_conflict", "#f39c12"))
+        lbl_status.pack(side="left")
+
+        def enable_now():
+            if self._enable_vhosts_in_httpd_conf():
+                lbl_status.configure(text="✅ Soporte de Virtual Hosts activo en httpd.conf", fg=t["fg_active"])
+                btn_enable.pack_forget()
+                self.send_notification("Virtual hosts habilitado en httpd.conf")
+                messagebox.showinfo("Éxito", "Se habilitó 'Include etc/extra/httpd-vhosts.conf'.\nReinicia Apache para aplicar.")
+
+        btn_enable = tk.Button(status_frame, text="Habilitar en httpd.conf", bg=t["btn_start"], fg="white",
+                               font=("Helvetica", 8, "bold"), command=enable_now)
+        if not is_enabled:
+            btn_enable.pack(side="right")
+
+        tree_frame = tk.Frame(win, bg=t["bg"])
+        tree_frame.pack(fill="both", expand=True, padx=12, pady=6)
+
+        cols = ("Dominio", "DocumentRoot", "Puerto")
+        tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=10)
+        tree.heading("Dominio", text="Dominio (ServerName)")
+        tree.heading("DocumentRoot", text="Carpeta Raíz (DocumentRoot)")
+        tree.heading("Puerto", text="Puerto")
+
+        tree.column("Dominio", width=180)
+        tree.column("DocumentRoot", width=340)
+        tree.column("Puerto", width=70, anchor="center")
+
+        tree.pack(side="left", fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+
+        def refresh_tree():
+            for item in tree.get_children():
+                tree.delete(item)
+            for vh in self._parse_vhosts_file():
+                tree.insert("", "end", values=(vh["server_name"], vh["doc_root"], vh["port"]))
+
+        refresh_tree()
+
+        btn_bar = tk.Frame(win, bg=t["bg"])
+        btn_bar.pack(fill="x", padx=12, pady=(6, 12))
+
+        def on_add():
+            self.create_vhost_dialog(on_created=lambda: (refresh_tree(), self.send_notification("Virtual Host creado")))
+
+        def on_open_browser():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Seleccionar", "Selecciona un Virtual Host de la lista.")
+                return
+            item = tree.item(sel[0])
+            domain = item["values"][0]
+            webbrowser.open(f"http://{domain}")
+
+        def on_delete():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("Seleccionar", "Selecciona un Virtual Host para eliminar.")
+                return
+            item = tree.item(sel[0])
+            domain = item["values"][0]
+            if messagebox.askyesno("Confirmar eliminación", f"¿Eliminar el Virtual Host '{domain}' de httpd-vhosts.conf?"):
+                vhosts_file = "/opt/lampp/etc/extra/httpd-vhosts.conf"
+                try:
+                    with open(vhosts_file, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                    pattern = rf'<VirtualHost\s+[^>]+>(?:(?!</VirtualHost>).)*ServerName\s+{re.escape(domain)}.*?</VirtualHost>\s*'
+                    new_content = re.sub(pattern, "", content, flags=re.DOTALL | re.IGNORECASE)
+                    
+                    try:
+                        with open(vhosts_file, "w", encoding="utf-8") as f:
+                            f.write(new_content)
+                    except PermissionError:
+                        tmp = "/tmp/vhosts_del.tmp"
+                        with open(tmp, "w", encoding="utf-8") as t:
+                            t.write(new_content)
+                        subprocess.run(["pkexec", "cp", tmp, vhosts_file], check=True, timeout=15)
+                        try:
+                            os.remove(tmp)
+                        except Exception:
+                            pass
+
+                    if messagebox.askyesno("/etc/hosts", f"¿Deseas también remover '{domain}' de /etc/hosts?"):
+                        try:
+                            with open("/etc/hosts", "r", encoding="utf-8") as hf:
+                                hosts_txt = hf.read()
+                            new_hosts = re.sub(rf'^.*?\b{re.escape(domain)}\b.*?\n', '', hosts_txt, flags=re.MULTILINE)
+                            tmp_h = "/tmp/hosts_cleaned.tmp"
+                            with open(tmp_h, "w", encoding="utf-8") as th:
+                                th.write(new_hosts)
+                            subprocess.run(["pkexec", "cp", tmp_h, "/etc/hosts"], check=True, timeout=15)
+                            try:
+                                os.remove(tmp_h)
+                            except Exception:
+                                pass
+                        except Exception as eh:
+                            write_log(f"Error limpiando /etc/hosts: {eh}")
+
+                    write_log(f"Virtual Host '{domain}' eliminado.")
+                    refresh_tree()
+                    messagebox.showinfo("Eliminado", f"Virtual Host '{domain}' eliminado correctamente.")
+                except Exception as e:
+                    write_log(f"Error eliminando vhost: {e}")
+                    messagebox.showerror("Error", f"No se pudo eliminar el vhost:\n{e}")
+
+        tk.Button(btn_bar, text="➕ Crear Virtual Host...", bg=t["btn_start"], fg="white",
+                  font=("Helvetica", 9, "bold"), command=on_add).pack(side="left", padx=3)
+        tk.Button(btn_bar, text="🌐 Abrir en Navegador", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=on_open_browser).pack(side="left", padx=3)
+        tk.Button(btn_bar, text="🗑 Eliminar VHost", bg=t["btn_stop"], fg="white",
+                  font=("Helvetica", 9), command=on_delete).pack(side="left", padx=3)
+        tk.Button(btn_bar, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=win.destroy).pack(side="right", padx=3)
+
+    def create_vhost_dialog(self, on_created=None):
+        """Asistente para crear un nuevo Virtual Host y registrarlo en /etc/hosts."""
+        t = THEMES[self.current_theme]
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Nuevo Virtual Host")
+        dlg.geometry("460x360")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.configure(bg=t["bg"])
+
+        tk.Label(dlg, text="Configurar Nuevo Virtual Host", font=("Helvetica", 11, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(pady=(12, 8))
+
+        form = tk.Frame(dlg, bg=t["bg"], padx=15)
+        form.pack(fill="both", expand=True)
+
+        tk.Label(form, text="Nombre de dominio (ej: miapp.test):", font=("Helvetica", 9),
+                 bg=t["bg"], fg=t["fg"], anchor="w").grid(row=0, column=0, sticky="w", pady=4)
+        ent_domain = tk.Entry(form, width=30, font=("Helvetica", 9))
+        ent_domain.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        tk.Label(form, text="Directorio del proyecto:", font=("Helvetica", 9),
+                 bg=t["bg"], fg=t["fg"], anchor="w").grid(row=2, column=0, sticky="w", pady=4)
+        
+        path_frame = tk.Frame(form, bg=t["bg"])
+        path_frame.grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        project_choices = getattr(self, "projects", [])
+        combo_proj = ttk.Combobox(path_frame, values=project_choices, width=22)
+        combo_proj.pack(side="left")
+
+        def on_browse_folder():
+            from tkinter import filedialog
+            chosen = filedialog.askdirectory(initialdir=HTDOCS_PATH, title="Seleccionar carpeta de proyecto")
+            if chosen:
+                ent_custom_path.delete(0, tk.END)
+                ent_custom_path.insert(0, chosen)
+
+        tk.Button(path_frame, text="Examinar...", font=("Helvetica", 8),
+                  command=on_browse_folder).pack(side="left", padx=5)
+
+        ent_custom_path = tk.Entry(form, width=38, font=("Monospace", 8))
+        ent_custom_path.grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        def on_combo_select(event=None):
+            selected = combo_proj.get().strip()
+            if selected:
+                full_p = os.path.join(HTDOCS_PATH, selected)
+                ent_custom_path.delete(0, tk.END)
+                ent_custom_path.insert(0, full_p)
+                if not ent_domain.get().strip():
+                    ent_domain.insert(0, f"{selected.lower()}.test")
+
+        combo_proj.bind("<<ComboboxSelected>>", on_combo_select)
+
+        var_public = tk.BooleanVar(value=True)
+        chk_public = tk.Checkbutton(form, text="Usar subdirectorio /public si existe (Laravel)",
+                                    variable=var_public, bg=t["bg"], fg=t["fg"],
+                                    selectcolor=t["bg_secondary"], activebackground=t["bg"])
+        chk_public.grid(row=5, column=0, columnspan=2, sticky="w", pady=2)
+
+        var_hosts = tk.BooleanVar(value=True)
+        chk_hosts = tk.Checkbutton(form, text="Añadir a /etc/hosts (127.0.0.1 dominio)",
+                                   variable=var_hosts, bg=t["bg"], fg=t["fg"],
+                                   selectcolor=t["bg_secondary"], activebackground=t["bg"])
+        chk_hosts.grid(row=6, column=0, columnspan=2, sticky="w", pady=2)
+
+        def save_vhost():
+            domain = ent_domain.get().strip()
+            proj_path = ent_custom_path.get().strip()
+
+            if not domain or not re.match(r'^[a-zA-Z0-9.-]+$', domain):
+                messagebox.showerror("Dominio inválido", "Introduce un dominio válido (ej: app.test o sitio.local).")
+                return
+
+            if not proj_path or not os.path.isdir(proj_path):
+                messagebox.showerror("Ruta inválida", "Selecciona una carpeta de proyecto válida.")
+                return
+
+            doc_root = proj_path
+            if var_public.get() and os.path.isdir(os.path.join(proj_path, "public")):
+                doc_root = os.path.join(proj_path, "public")
+
+            stanza = (
+                f"\n# Virtual Host para {domain}\n"
+                f"<VirtualHost *:80>\n"
+                f"    ServerAdmin webmaster@{domain}\n"
+                f"    DocumentRoot \"{doc_root}\"\n"
+                f"    ServerName {domain}\n"
+                f"    ServerAlias www.{domain}\n"
+                f"    <Directory \"{doc_root}\">\n"
+                f"        Options Indexes FollowSymLinks MultiViews\n"
+                f"        AllowOverride All\n"
+                f"        Require all granted\n"
+                f"    </Directory>\n"
+                f"    ErrorLog \"logs/{domain}-error_log\"\n"
+                f"    CustomLog \"logs/{domain}-access_log\" common\n"
+                f"</VirtualHost>\n"
+            )
+
+            vhosts_file = "/opt/lampp/etc/extra/httpd-vhosts.conf"
+            try:
+                if not self._is_vhosts_enabled():
+                    self._enable_vhosts_in_httpd_conf()
+
+                try:
+                    with open(vhosts_file, "a", encoding="utf-8") as f:
+                        f.write(stanza)
+                except PermissionError:
+                    tmp = "/tmp/vhost_add.tmp"
+                    current = ""
+                    if os.path.isfile(vhosts_file):
+                        with open(vhosts_file, "r", encoding="utf-8", errors="replace") as cf:
+                            current = cf.read()
+                    with open(tmp, "w", encoding="utf-8") as t:
+                        t.write(current + stanza)
+                    subprocess.run(["pkexec", "cp", tmp, vhosts_file], check=True, timeout=15)
+                    try:
+                        os.remove(tmp)
+                    except Exception:
+                        pass
+
+                if var_hosts.get():
+                    hosts_entry = f"127.0.0.1\t{domain}\twww.{domain}\n"
+                    with open("/etc/hosts", "r", encoding="utf-8", errors="replace") as hf:
+                        h_content = hf.read()
+                    if domain not in h_content:
+                        cmd = ["pkexec", "bash", "-c", f"echo -e '{hosts_entry}' >> /etc/hosts"]
+                        subprocess.run(cmd, check=True, timeout=15)
+
+                write_log(f"Virtual Host '{domain}' creado con éxito.")
+                messagebox.showinfo("Éxito", f"Virtual Host '{domain}' configurado correctamente.")
+                if on_created:
+                    on_created()
+                dlg.destroy()
+
+                if messagebox.askyesno("Reiniciar Apache", "¿Deseas reiniciar Apache ahora para que el nuevo dominio tome efecto?"):
+                    self.run_service("restart", "apache")
+            except Exception as e:
+                write_log(f"Error creando Virtual Host: {e}")
+                messagebox.showerror("Error", f"No se pudo crear el Virtual Host:\n{e}")
+
+        btn_box = tk.Frame(dlg, bg=t["bg"])
+        btn_box.pack(pady=10)
+
+        tk.Button(btn_box, text="💾 Crear y Configurar", bg=t["btn_start"], fg="white",
+                  font=("Helvetica", 9, "bold"), command=save_vhost).pack(side="left", padx=5)
+        tk.Button(btn_box, text="Cancelar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=dlg.destroy).pack(side="left", padx=5)
+
+    # =========================================================================
+    # Asistente de Resolución de Conflictos y Extensiones PHP
+    # =========================================================================
+
+    def show_conflict_resolver(self):
+        """Asistente de diagnóstico y resolución de conflictos de puertos."""
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Asistente de Resolución de Conflictos")
+        win.geometry("520x420")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        tk.Label(win, text="Diagnóstico de Puertos y Conflictos", font=("Helvetica", 12, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(pady=(12, 6))
+
+        frame = tk.Frame(win, bg=t["bg_secondary"], padx=15, pady=12)
+        frame.pack(fill="both", expand=True, padx=15, pady=6)
+
+        conflicts = []
+
+        if self._port_open("127.0.0.1", 80) and not _is_service_running(ALL_SERVICES["Apache"]):
+            culprit = "desconocido"
+            try:
+                res = subprocess.run(["systemctl", "is-active", "apache2"], capture_output=True, text=True)
+                if res.stdout.strip() == "active":
+                    culprit = "apache2 (servicio nativo de Linux Mint / Ubuntu)"
+                else:
+                    res_ng = subprocess.run(["systemctl", "is-active", "nginx"], capture_output=True, text=True)
+                    if res_ng.stdout.strip() == "active":
+                        culprit = "nginx (servidor web del sistema)"
+            except Exception:
+                pass
+            conflicts.append({"service": "Apache", "port": 80, "culprit": culprit, "sys_service": "apache2"})
+
+        if self._port_open("127.0.0.1", 3306) and not _is_service_running(ALL_SERVICES["MySQL"]):
+            culprit_db = "desconocido"
+            sys_db = "mariadb"
+            try:
+                res_m = subprocess.run(["systemctl", "is-active", "mariadb"], capture_output=True, text=True)
+                if res_m.stdout.strip() == "active":
+                    culprit_db = "mariadb (servidor de base de datos nativo)"
+                    sys_db = "mariadb"
+                else:
+                    res_my = subprocess.run(["systemctl", "is-active", "mysql"], capture_output=True, text=True)
+                    if res_my.stdout.strip() == "active":
+                        culprit_db = "mysql (servidor nativo del sistema)"
+                        sys_db = "mysql"
+            except Exception:
+                pass
+            conflicts.append({"service": "MySQL", "port": 3306, "culprit": culprit_db, "sys_service": sys_db})
+
+        if not conflicts:
+            tk.Label(frame, text="✅ No se han detectado conflictos en los puertos principales.",
+                     font=("Helvetica", 10, "bold"), bg=t["bg_secondary"], fg=t["fg_active"]).pack(pady=20)
+            tk.Label(frame, text="Los puertos 80 (Apache) y 3306 (MySQL) están completamente\nlibres o siendo utilizados por XAMPP correctamente.",
+                     font=("Helvetica", 9), bg=t["bg_secondary"], fg=t["fg"]).pack()
+        else:
+            tk.Label(frame, text="⚠️ Se detectaron servicios del sistema bloqueando XAMPP:",
+                     font=("Helvetica", 10, "bold"), bg=t["bg_secondary"], fg=t.get("fg_conflict", "#f39c12")).pack(anchor="w", pady=(0, 10))
+
+            for conf in conflicts:
+                card = tk.Frame(frame, bg=t["bg"], padx=10, pady=8, highlightbackground="#313244", highlightthickness=1)
+                card.pack(fill="x", pady=5)
+
+                txt = f"• Puerto {conf['port']} ({conf['service']}): Ocupado por {conf['culprit']}."
+                tk.Label(card, text=txt, font=("Helvetica", 9, "bold"), bg=t["bg"], fg=t["fg"], wraplength=440, justify="left").pack(anchor="w")
+
+                def resolve(sys_svc=conf["sys_service"]):
+                    if messagebox.askyesno(
+                        "Desactivar servicio",
+                        f"¿Detener y deshabilitar '{sys_svc}' del sistema para permitir que XAMPP funcione?\n\n"
+                        f"Comando: pkexec systemctl stop {sys_svc} && pkexec systemctl disable {sys_svc}"
+                    ):
+                        try:
+                            subprocess.run(["pkexec", "bash", "-c", f"systemctl stop {sys_svc} && systemctl disable {sys_svc}"], check=True, timeout=15)
+                            write_log(f"Servicio del sistema {sys_svc} detenido y desactivado.")
+                            self.send_notification(f"{sys_svc} detenido.")
+                            messagebox.showinfo("Resuelto", f"Se detuvo '{sys_svc}'.\nAhora puedes iniciar XAMPP.")
+                            win.destroy()
+                            self.update_status()
+                        except Exception as ex:
+                            write_log(f"Error deteniendo {sys_svc}: {ex}")
+                            messagebox.showerror("Error", f"No se pudo detener {sys_svc}:\n{ex}")
+
+                tk.Button(card, text=f"Detener y desactivar {conf['sys_service']} del sistema",
+                          bg=t["btn_start"], fg="white", font=("Helvetica", 8, "bold"),
+                          command=resolve).pack(anchor="w", pady=(5, 0))
+
+        tk.Button(win, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=win.destroy).pack(pady=10)
+
+    def show_php_extensions_dialog(self):
+        """Muestra lista de extensiones de PHP activas y permite activarlas."""
+        t = THEMES[self.current_theme]
+        win = tk.Toplevel(self.root)
+        win.title("Extensiones de PHP (Módulos)")
+        win.geometry("480x420")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.configure(bg=t["bg"])
+
+        tk.Label(win, text="Módulos y Extensiones de PHP", font=("Helvetica", 11, "bold"),
+                 bg=t["bg"], fg=t["fg_label"]).pack(pady=(12, 6))
+
+        loaded_modules = set()
+        php_bin = "/opt/lampp/bin/php"
+        if os.path.isfile(php_bin):
+            try:
+                res = subprocess.run([php_bin, "-m"], capture_output=True, text=True, timeout=5)
+                if res.returncode == 0:
+                    loaded_modules = set(m.strip().lower() for m in res.stdout.splitlines() if m.strip())
+            except Exception as e:
+                write_log(f"Error listando módulos PHP: {e}")
+
+        common_exts = [
+            ("curl", "Cliente HTTP y peticiones cURL"),
+            ("intl", "Internacionalización (requerido por Symfony/Laravel)"),
+            ("mbstring", "Manejo de cadenas multibyte UTF-8"),
+            ("openssl", "Criptografía y HTTPS seguro"),
+            ("pdo_mysql", "Conector PDO MySQL/MariaDB"),
+            ("mysqli", "Conector nativo MySQLi"),
+            ("zip", "Compresión Zip (requerido por Composer)"),
+            ("gd", "Manipulación y redimensionado de imágenes"),
+            ("fileinfo", "Detección precisa de tipos MIME"),
+            ("bcmath", "Matemáticas de precisión arbitraria"),
+            ("soap", "Protocolo de servicios web SOAP"),
+        ]
+
+        frame_scroll = tk.Frame(win, bg=t["bg_secondary"], padx=10, pady=8)
+        frame_scroll.pack(fill="both", expand=True, padx=12, pady=6)
+
+        canvas = tk.Canvas(frame_scroll, bg=t["bg_secondary"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(frame_scroll, orient="vertical", command=canvas.yview)
+        inner_frame = tk.Frame(canvas, bg=t["bg_secondary"])
+
+        inner_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        php_ini_path = "/opt/lampp/etc/php.ini"
+
+        def enable_extension(ext_name):
+            if not os.path.isfile(php_ini_path):
+                messagebox.showerror("Error", f"No se encontró {php_ini_path}")
+                return
+            try:
+                with open(php_ini_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+
+                pattern = rf'^\s*;\s*(extension\s*=\s*(?:php_)?{re.escape(ext_name)}(?:\.so|\.dll)?)'
+                if re.search(pattern, content, re.MULTILINE):
+                    new_content = re.sub(pattern, r'\g<1>', content, flags=re.MULTILINE)
+                else:
+                    new_content = content + f"\nextension={ext_name}.so\n"
+
+                try:
+                    with open(php_ini_path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+                except PermissionError:
+                    tmp = "/tmp/php_ext_enable.tmp"
+                    with open(tmp, "w", encoding="utf-8") as t_f:
+                        t_f.write(new_content)
+                    subprocess.run(["pkexec", "cp", tmp, php_ini_path], check=True, timeout=15)
+                    try:
+                        os.remove(tmp)
+                    except Exception:
+                        pass
+
+                write_log(f"Extensión PHP '{ext_name}' habilitada en php.ini")
+                messagebox.showinfo("Éxito", f"Extensión '{ext_name}' activada en php.ini.\nReinicia Apache para que tome efecto.")
+                win.destroy()
+            except Exception as ex:
+                write_log(f"Error activando extensión {ext_name}: {ex}")
+                messagebox.showerror("Error", f"No se pudo modificar php.ini:\n{ex}")
+
+        for ext_name, desc in common_exts:
+            row = tk.Frame(inner_frame, bg=t["bg_secondary"], pady=4)
+            row.pack(fill="x", padx=5)
+
+            is_active = ext_name.lower() in loaded_modules
+            badge_txt = "✅ Activa" if is_active else "⚪ Inactiva"
+            badge_color = t["fg_active"] if is_active else t.get("fg_conflict", "#888888")
+
+            tk.Label(row, text=badge_txt, font=("Helvetica", 8, "bold"),
+                     bg=t["bg_secondary"], fg=badge_color, width=9, anchor="w").pack(side="left")
+            
+            tk.Label(row, text=f"{ext_name}:", font=("Monospace", 9, "bold"),
+                     bg=t["bg_secondary"], fg=t["fg"], width=12, anchor="w").pack(side="left")
+
+            tk.Label(row, text=desc, font=("Helvetica", 8),
+                     bg=t["bg_secondary"], fg=t["fg"], anchor="w").pack(side="left", padx=5)
+
+            if not is_active:
+                tk.Button(row, text="Activar", font=("Helvetica", 7, "bold"),
+                          bg=t["btn_start"], fg="white",
+                          command=lambda e=ext_name: enable_extension(e)).pack(side="right", padx=4)
+
+        tk.Button(win, text="Cerrar", bg=t["bg_button"], fg=t["fg"],
+                  font=("Helvetica", 9), command=win.destroy).pack(pady=8)
+
+    def install_desktop_shortcut(self):
+        """Instala el acceso directo en el menú de aplicaciones de Linux Mint."""
+        install_script = os.path.join(PROJECT_DIR, "install.sh")
+        if os.path.isfile(install_script):
+            try:
+                res = subprocess.run(["bash", install_script], capture_output=True, text=True, timeout=10)
+                if res.returncode == 0:
+                    self.send_notification("Acceso directo instalado en el menú de Linux Mint")
+                    messagebox.showinfo("Instalación Exitosa",
+                                        "Se ha instalado el acceso directo en tu menú de aplicaciones.\n\n"
+                                        "Busca 'XAMPP Control Center' en la categoría Desarrollo o Programación.")
+                else:
+                    messagebox.showerror("Error", f"Fallo al ejecutar instalador:\n{res.stderr}")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo ejecutar install.sh:\n{e}")
+        else:
+            messagebox.showerror("No encontrado", f"No se encontró el script instalador:\n{install_script}")
 
 LOG_MAX_BYTES = 1024 * 1024  # 1MB
 LOG_MAX_FILES = 5

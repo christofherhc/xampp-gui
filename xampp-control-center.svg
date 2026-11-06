@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e1e2e"/>
+      <stop offset="100%" stop-color="#11111b"/>
+    </linearGradient>
+    <linearGradient id="xamppGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fb923c"/>
+      <stop offset="50%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#ea580c"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+    <linearGradient id="sliderActive" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4ade80"/>
+      <stop offset="100%" stop-color="#22c55e"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <!-- Base redondeada con borde sutil -->
+  <rect x="6" y="6" width="116" height="116" rx="26" fill="url(#bgGrad)" stroke="#313244" stroke-width="2" filter="url(#shadow)"/>
+
+  <!-- Letra X central estilizada (símbolo XAMPP) -->
+  <path d="M 30 32 L 48 32 L 64 54 L 80 32 L 98 32 L 74 64 L 98 96 L 80 96 L 64 74 L 48 96 L 30 96 L 54 64 Z" 
+        fill="url(#xamppGrad)" filter="url(#shadow)"/>
+
+  <!-- Sliders / Controles superpuestos -->
+  <!-- Slider 1: Activo (Verde) -->
+  <rect x="22" y="102" width="40" height="6" rx="3" fill="#313244"/>
+  <rect x="22" y="102" width="26" height="6" rx="3" fill="url(#sliderActive)"/>
+  <circle cx="48" cy="105" r="5" fill="#4ade80" stroke="#1e1e2e" stroke-width="1.5"/>
+
+  <!-- Slider 2: Activo (Azul) -->
+  <rect x="66" y="102" width="40" height="6" rx="3" fill="#313244"/>
+  <rect x="66" y="102" width="22" height="6" rx="3" fill="url(#accentGrad)"/>
+  <circle cx="88" cy="105" r="5" fill="#38bdf8" stroke="#1e1e2e" stroke-width="1.5"/>
+
+  <!-- Puntos indicadores superiores (Status LED) -->
+  <circle cx="28" cy="22" r="3.5" fill="#4ade80"/>
+  <circle cx="40" cy="22" r="3.5" fill="#38bdf8"/>
+  <circle cx="52" cy="22" r="3.5" fill="#facc15"/>
+</svg>

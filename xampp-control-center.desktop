@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=XAMPP Control Center
+GenericName=Panel de Control XAMPP
+Comment=Administrador gráfico de servicios y proyectos para XAMPP en Linux
+Exec=python3 /home/chris/.local/bin/xampp-gui/xampp-gui.py
+Icon=/home/chris/.local/bin/xampp-gui/xampp-control-center.svg
+Terminal=false
+Categories=Development;WebDevelopment;System;
+StartupNotify=true
+Keywords=xampp;lamp;apache;mysql;php;phpmyadmin;

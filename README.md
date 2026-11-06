@@ -60,13 +60,59 @@ A diferencia de los paneles tradicionales que dependen únicamente del archivo P
 - **Prevención de Concurrencia:** Bloqueo reactivo de botones durante la ejecución de tareas para evitar colisiones entre comandos.
 - **Acciones Globales Atómicas:** Permite iniciar, detener o reiniciar todos los servicios con una sola solicitud de credenciales Polkit (`pkexec`).
 
-### 📂 Gestor Integrado de Proyectos (`htdocs`)
+### 📂 Gestor Integrado de Proyectos (`htdocs`) con Detección de Frameworks
+- **Detección Automática de Frameworks:** Analiza la tecnología del proyecto y muestra una insignia visual inmediata:
+  - ⚡ **Laravel:** Reconocimiento de `artisan`; el botón **Navegador** redirige automáticamente a `http://localhost/<proyecto>/public`.
+  - 📰 **WordPress:** Reconocimiento de `wp-config.php`, `wp-content`, etc.
+  - ▲ **Next.js** y 📦 **Node.js:** Reconocimiento de `package.json` y configuraciones.
+  - 🐍 **Django** y **Python:** Reconocimiento de `manage.py`, `requirements.txt`, etc.
+  - 🐘 **Composer / PHP:** Proyectos PHP tradicionales.
+  - 🌐 **HTML:** Proyectos estáticos con `index.html`.
 - **Escaneo Inteligente:** Lista las carpetas en `/opt/lampp/htdocs` filtrando automáticamente carpetas internas de sistema (como `img` o `webalizer`).
 - **Creación Rápida (`➕`):** Crea un nuevo proyecto web directamente desde la GUI con validación de seguridad contra path traversal.
 - **Abrir en Editor (`✏`):** Abre el proyecto completo en tu IDE o editor configurado (VS Code, Sublime Text, Gedit, Kate, etc.).
 - **Abrir Terminal (`💻`):** Lanza tu emulador de terminal favorito (`alacritty`, `kitty`, `gnome-terminal`, `konsole`, `tilix`, etc.) ubicado automáticamente en la raíz del proyecto.
 - **Abrir en Navegador (`🌐`):** Abre `http://localhost/<proyecto>` en tu navegador predeterminado con comprobación previa de salud de Apache.
 - **Explorar Carpeta (`📁`):** Abre la carpeta específica del proyecto en el gestor de archivos del sistema.
+
+### 🐬 Herramientas Rápidas de Base de Datos (MySQL)
+Desde el nuevo menú **Base de Datos** en la barra superior:
+- **Crear Nueva Base de Datos:** Diálogo asistido con validación estricta de nombres y codificación predeterminada `utf8mb4` / `utf8mb4_unicode_ci`.
+- **Consola MySQL en Terminal:** Lanza una consola interactiva oficial de MySQL (`/opt/lampp/bin/mysql -u root`) dentro de tu emulador de terminal preferido.
+- **Exportar Respaldo (.sql):** Selector interactivo de bases de datos que ejecuta `mysqldump` en segundo plano con flags de nivel producción (`--single-transaction`, `--routines`, `--triggers`, UTF-8).
+- **Importar Respaldo (.sql):** Asistente para seleccionar un archivo `.sql` e importarlo en streaming a la base de datos de tu elección (con opción automática de crear la base de datos si no existe).
+
+### 🧹 Herramientas de Mantenimiento y Janitor
+Desde el nuevo menú **Herramientas**:
+- **Purga de Logs del Servidor:** Identifica y muestra el tamaño total de los archivos de registro (`access_log`, `error_log`, `php_error_log`, etc.) y permite truncarlos con confirmación previa y elevación Polkit transparente.
+- **Limpieza de Sesiones Temporales:** Escanea y elimina archivos de sesión huérfanos (`sess_*`) acumulados en `/opt/lampp/temp`.
+- **Diagnóstico del Entorno y Disco:** Monitor visual del almacenamiento de la partición de XAMPP con barra de uso y verificación de permisos de escritura en `/opt/lampp/htdocs` con la sugerencia de comando de corrección para tu usuario.
+- **Ajustes Rápidos de PHP (php.ini):** Modal gráfico para inspeccionar y ajustar de forma segura directivas críticas (`upload_max_filesize`, `post_max_size`, `memory_limit`, `max_execution_time`) creando una copia de seguridad automática (`php.ini.bak`).
+
+### 🌐 Administrador Gráfico de Virtual Hosts (VHosts)
+Permite configurar y gestionar dominios locales personalizados (ej. `misitio.test`, `laravel.local`) sin editar archivos manualmente en la terminal:
+- **Habilitación con 1 Clic:** Detecta si la directiva `Include etc/extra/httpd-vhosts.conf` está activa en `/opt/lampp/etc/httpd.conf` y ofrece habilitarla automáticamente con respaldo (`httpd.conf.bak`).
+- **Asistente Guiado de Creación:**
+  - Validación de nombre de dominio contra caracteres inválidos.
+  - Vinculación a proyectos de `htdocs` o selección de carpeta personalizada mediante explorador.
+  - **Soporte Inteligente para Laravel:** Detecta si existe la carpeta `/public` y la asigna automáticamente como `DocumentRoot`.
+  - **Sincronización con `/etc/hosts`:** Agrega automáticamente `127.0.0.1 dominio www.dominio` mediante Polkit (`pkexec`).
+- **Exploración y Eliminación:** Lista en tabla con columnas de dominio, ruta y puerto, botón para abrir directamente en el navegador (`🌐`) y opción para eliminar el Virtual Host junto con la limpieza de su entrada en `/etc/hosts`.
+
+### 🚨 Asistente de Resolución de Conflictos de Puertos
+En distribuciones como Linux Mint y Ubuntu es muy común que servicios nativos del sistema como `apache2`, `nginx` o `mariadb` se inicien en el arranque, bloqueando los puertos 80 o 3306 e impidiendo que XAMPP funcione:
+- **Detección Automática:** Verifica si los puertos 80 y 3306 están abiertos mientras XAMPP está apagado e identifica el servicio nativo culpable mediante `systemctl is-active`.
+- **Resolución con 1 Clic:** Ofrece un botón para detener y deshabilitar el servicio conflictivo del sistema (`pkexec systemctl stop <svc> && pkexec systemctl disable <svc>`), liberando el puerto de forma permanente para XAMPP.
+
+### 🧩 Inspector y Activador de Extensiones de PHP
+- **Lectura en Vivo:** Lee los módulos cargados en tiempo real ejecutando `/opt/lampp/bin/php -m`.
+- **Módulos Frecuentes:** Monitorea extensiones críticas para el desarrollo web moderno: `curl`, `intl` (Symfony/Laravel), `mbstring`, `openssl`, `pdo_mysql`, `mysqli`, `zip` (Composer), `gd`, `fileinfo`, `bcmath`, `soap`.
+- **Activación Gráfica:** Si una extensión está inactiva, un botón **Activar** descomenta o inserta la directiva correspondiente en `/opt/lampp/etc/php.ini` de forma segura mediante elevación Polkit.
+
+### 🖥️ Integración Completa de Escritorio Linux Mint / Cinnamon
+- **Instalador y Desinstalador:** Scripts interactivos `install.sh` y `uninstall.sh` para registrar el acceso directo y el ícono en el sistema.
+- **Acceso Directo desde la GUI:** Opción en el menú **Herramientas ➔ Instalar acceso directo en el sistema...** para instalar el lanzador con un solo clic.
+- **Ícono Vectorial Moderno:** Incluye `xampp-control-center.svg` escalable para una apariencia nítida en paneles, menús y docks modernos.
 
 ### ⚙️ Accesos Directos a Configuración y Logs
 - Edición inmediata en un clic de los archivos principales de XAMPP:
@@ -116,36 +162,24 @@ git clone https://github.com/christofherhc/xampp-gui.git ~/.local/bin/xampp-gui
 cd ~/.local/bin/xampp-gui
 ```
 
-### 2. Dar permisos de ejecución
+### 2. Instalar acceso directo en el sistema (Recomendado)
+El proyecto incluye un script de instalación automatizado para registrar el icono oficial y el acceso directo en el menú de aplicaciones de tu distribución:
+
 ```bash
-chmod +x xampp-gui.py
+chmod +x install.sh uninstall.sh xampp-gui.py
+./install.sh
 ```
 
-### 3. Crear el lanzador de escritorio (.desktop)
-Para integrar la aplicación en el menú de aplicaciones de tu entorno de escritorio (Cinnamon, GNOME, XFCE, MATE, KDE):
+El instalador:
+- Instala el icono vectorial oficial `xampp-control-center.svg` en `~/.local/share/icons/hicolor/scalable/apps/`.
+- Configura e instala el archivo de escritorio `xampp-control-center.desktop` en `~/.local/share/applications/`.
+- Actualiza la caché del entorno de escritorio automáticamente.
 
+> **Tip:** También puedes instalar o reinstalar el acceso directo en cualquier momento desde la propia aplicación en el menú **Herramientas ➔ Instalar acceso directo en el sistema...**
+
+Para desinstalar el acceso directo y sus iconos en el futuro:
 ```bash
-mkdir -p ~/.local/share/applications
-
-cat << 'EOF' > ~/.local/share/applications/xampp-control.desktop
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=XAMPP Control Center
-Comment=Panel de control para XAMPP
-Exec=python3 /home/chris/.local/bin/xampp-gui/xampp-gui.py
-Icon=/opt/lampp/htdocs/favicon.ico
-Terminal=false
-Categories=Development;WebDevelopment;IDE;
-StartupNotify=false
-EOF
-```
-
-> **Nota:** Si tu usuario no es `chris`, ajusta la ruta del parámetro `Exec` con tu usuario actual: `Exec=python3 /home/$USER/.local/bin/xampp-gui/xampp-gui.py`.
-
-Actualiza la base de datos de aplicaciones de tu escritorio:
-```bash
-update-desktop-database ~/.local/share/applications/
+./uninstall.sh
 ```
 
 ---
@@ -218,10 +252,14 @@ sudo apt update && sudo apt install -y python3-tk
 
 ```
 xampp-gui/
-├── xampp-gui.py           # Código fuente principal de la aplicación GUI
-├── xampp-gui-prefs.json   # Archivo de configuración local de preferencias de usuario
-├── debug.log              # Log de eventos internos de la aplicación (con rotación)
-└── README.md              # Documentación oficial
+├── xampp-gui.py                # Código fuente principal de la aplicación GUI
+├── xampp-control-center.desktop # Entrada de escritorio para el menú de aplicaciones
+├── xampp-control-center.svg     # Icono vectorial escalable oficial
+├── install.sh                  # Script de instalación e integración en el sistema
+├── uninstall.sh                # Script de desinstalación limpia
+├── xampp-gui-prefs.json        # Archivo local de preferencias del usuario
+├── debug.log                   # Log de eventos internos de la aplicación (con rotación)
+└── README.md                   # Documentación oficial
 ```
 
 ---
